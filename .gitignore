@@ -1,0 +1,19 @@
+# Ignore Gradle project-specific cache directory
+.gradle
+
+# Ignore Gradle build output directory
+build
+
+
+results
+problem/store
+model/save
+model/store
+app/build
+__pycache__
+.idea
+analysis/output
+analysis/constrained_fibre
+analysis/constrained_truss
+analysis/stiffness_ratio_transfer
+analysis/unconstrained_truss
