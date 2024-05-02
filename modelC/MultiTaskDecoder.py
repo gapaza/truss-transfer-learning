@@ -108,10 +108,10 @@ class MultiTaskDecoder(tf.keras.Model):
 
         # 1. Weights
         # split off last weight
-        constraint_weight = weights[:, -1:]
-        constraint_weight = tf.expand_dims(constraint_weight, axis=-1)
-        constraint_weight = tf.tile(constraint_weight, [1, 1, self.embed_dim])
-        weights = weights[:, :-1]
+        # constraint_weight = weights[:, -1:]
+        # constraint_weight = tf.expand_dims(constraint_weight, axis=-1)
+        # constraint_weight = tf.tile(constraint_weight, [1, 1, self.embed_dim])
+        # weights = weights[:, :-1]
 
         weight_seq = self.add_positional_encoding(weights)  # (batch, num_weights, embed_dim)
 
@@ -121,8 +121,8 @@ class MultiTaskDecoder(tf.keras.Model):
         # 3. Decoder Stack
         decoded_design = design_sequences_embedded
         decoded_design = self.decoder_1(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
-        decoded_design = self.decoder_2(decoded_design, encoder_sequence=constraint_weight, use_causal_mask=True, training=training)
-        # decoded_design = self.decoder_3(decoded_design, encoder_sequence=constraint_weight, use_causal_mask=True, training=training)
+        decoded_design = self.decoder_2(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
+        # decoded_design = self.decoder_3(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
         # decoded_design = self.decoder_4(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
         # decoded_design = self.decoder_5(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True)
 
@@ -228,10 +228,10 @@ class MultiTaskDecoderCritic(tf.keras.Model):
         design_sequences, weights = inputs
 
         # 1. Weights
-        constraint_weight = weights[:, -1:]
-        constraint_weight = tf.expand_dims(constraint_weight, axis=-1)
-        constraint_weight = tf.tile(constraint_weight, [1, 1, self.embed_dim])
-        weights = weights[:, :-1]
+        # constraint_weight = weights[:, -1:]
+        # constraint_weight = tf.expand_dims(constraint_weight, axis=-1)
+        # constraint_weight = tf.tile(constraint_weight, [1, 1, self.embed_dim])
+        # weights = weights[:, :-1]
 
         weight_seq = self.add_positional_encoding(weights)
 

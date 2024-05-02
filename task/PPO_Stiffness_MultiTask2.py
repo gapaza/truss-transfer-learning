@@ -14,9 +14,10 @@ from task.AbstractTask import AbstractTask
 from problem.TrussDesign import TrussDesign as Design
 import scipy.signal
 from task.GA_Constrained_Task import GA_Constrained_Task
-from model import get_multi_task_decoder as get_model
+from model import get_multi_task_decoder_v2 as get_model
 from collections import OrderedDict
 import tensorflow_addons as tfa
+from problem import get_str_targets
 
 
 def discounted_cumulative_sums(x, discount):
@@ -24,60 +25,109 @@ def discounted_cumulative_sums(x, discount):
     return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
 
-# Sampling parameters
-num_weight_samples = 4
-num_task_samples = 6
-repeat_size = 2
-global_mini_batch_size = num_weight_samples * num_task_samples * repeat_size
+num_conditioning_vars = config.num_conditioning_vars
 
-# Run parameters
-run_dir = 0
-run_num = 0
+
+# Save parameters
+save_init_weights = False
+load_init_weights = False
+run_dir = 50
+run_num = 6
 plot_freq = 50
-save_freq = 50
 
 # Problem parameters
-target_stiffness_ratio = 1.0
-feasible_stiffness_delta = 0.01
-num_tasks = 36
+problem_num = 0
+val_task_num = 4
+
+# min_str, max_str, str_delta = 0.8, 1.2, 0.01
+# target_ratios, target_ratios_norm = get_str_targets(min_str, max_str, str_delta)
+# target_tasks = [(x, y) for x, y in zip(target_ratios, target_ratios_norm)]
+
+min_str, max_str, str_delta = 0.2, 1.8, 0.001
+target_ratios, target_ratios_norm = get_str_targets(min_str, max_str, str_delta)
+target_tasks = []
+for x, y in zip(target_ratios, target_ratios_norm):
+    target_tasks.append((x, y))
+    # if x < 0.8 or x > 1.2:
+    #     target_tasks.append((x, y))
+
+# print(len(target_tasks))
+# exit(0)
+
+
+
+# Sampling parameters
+def get_num_weight_samples(epoch=0):
+    return 4
+
+def get_num_task_samples(epoch=0):
+    return 16
+
+def get_repeat_size(epoch=0):
+    return 1
+
+
+# global_mini_batch_size = get * num_task_samples * repeat_size
+global_mini_batch_size = get_num_weight_samples(0) * get_num_task_samples(0) * get_repeat_size(0)
+
+
+uniform_sampling = False
+bimodal_sampling = True
+bimodal_alternating_sampling = False
+trimodal_sampling = False
+
+
+
+# Fine-tuning parameters
+update_actor = True
+update_critic = True
+freeze_actor_base = False
+freeze_critic_base = False
+
 
 # Training Parameters
 task_epochs = 10000
 clip_ratio = 0.2
 target_kl = 0.005
-entropy_coef = 0.02
+entropy_coef = 0.06
 
-# Reward weight terms
-perf_term_weight = 1.0
-
-str_multiplier = 5.0  # was 3.0
-fea_multiplier = 5.0
-constraint_term_weights_epochs = [100]
-constraint_term_weights = [0.0, 0.0]  # was 0.05
+use_actor_warmup = True
 
 use_actor_train_call = False
 use_critic_train_call = False
 
-# Learning Rates
-actor_learning_rate = 0.0001
-critic_learning_rate = 0.0001
-train_actor_iterations = 250
-train_critic_iterations = 40
-
-# Set seeds to 0
+# Set random seed and tensorflow seed
 random.seed(0)
 tf.random.set_seed(0)
 
+# Reward Weights
+perf_term_weight_epochs = [100]
+perf_term_weights = [1.0, 1.0]
+constraint_term_weights_epochs = [100]
+constraint_term_weights = [0.5, 0.5]
+
+# perf_term_weight_epochs = [x for x in range(100, 600, 50)]
+# perf_term_weights = list(np.linspace(1.0, 0.0, len(perf_term_weight_epochs)))
+# constraint_term_weights_epochs = [x for x in range(100, 600, 50)]
+# constraint_term_weights = list(np.linspace(0.0, 1.0, len(constraint_term_weights_epochs)))
+
 
 def get_constraint_weight(epoch):
-    for idx, threshold in enumerate(constraint_term_weights_epochs):
-        if epoch <= threshold:
-            return constraint_term_weights[idx]
-    return constraint_term_weights[-1]
+    return 0.001
+    # for idx, threshold in enumerate(constraint_term_weights_epochs):
+    #     if epoch <= threshold:
+    #         return constraint_term_weights[idx]
+    # return constraint_term_weights[-1]
+
+def get_performance_weight(epoch):
+    return 0.1
+    # for idx, threshold in enumerate(perf_term_weight_epochs):
+    #     if epoch <= threshold:
+    #         return perf_term_weights[idx]
+    # return perf_term_weights[-1]
 
 
-
-class PPO_Constrained_MultiTask(AbstractTask):
+class PPO_Stiffness_MultiTask(AbstractTask):
 
     def __init__(
             self,
@@ -91,38 +141,38 @@ class PPO_Constrained_MultiTask(AbstractTask):
             c_type='uniform',
             run_val=False,
             val_itr=0,
-            num_tasks=9,
+            val_task=0,
     ):
-        super(PPO_Constrained_MultiTask, self).__init__(run_num, barrier, problem, epochs, actor_load_path, critic_load_path)
+        super(PPO_Stiffness_MultiTask, self).__init__(run_num, barrier, problem, epochs, actor_load_path, critic_load_path)
         self.debug = debug
         self.c_type = c_type
         self.run_val = run_val
         self.val_itr = val_itr
-        self.num_tasks = num_tasks
+        self.val_task = val_task
 
         # HV
         self.ref_point = np.array(config.hv_ref_point)  # value, weight
         self.hv_client = HV(self.ref_point)
-        self.unique_designs_all = set()
-        self.unique_designs = [set() for _ in range(self.num_tasks)]
-        self.unique_designs_vals = [[] for _ in range(self.num_tasks)]
-        self.unique_designs_feasible = [[] for _ in range(self.num_tasks)]
+        self.nds = NonDominatedSorting()
+        self.unique_designs = set()
+        self.unique_designs_vals = []
+        self.unique_designs_feasible = []
+        self.constraint_returns = []
+        self.avg_str_values = []
+        self.min_stiffness_delta = []
 
         # Algorithm parameters
         self.pop_size = 30  # 32 FU_NSGA2, 10 U_NSGA2
-        self.offspring_size = global_mini_batch_size  # 32 FU_NSGA2, 30 U_NSGA2
         self.mini_batch_size = global_mini_batch_size
         self.nfe = 0
-        self.nfes = [0 for _ in range(self.num_tasks)]
-        self.task_nfes = [[] for _ in range(self.num_tasks)]
         self.epochs = epochs
-        self.steps_per_design = config.num_vars  # 30 | 60
+        self.steps_per_design = 30  # 30 | 60
 
         # PPO alg parameters
         self.gamma = 0.99
         self.lam = 0.95
-        self.clip_ratio = clip_ratio
-        self.target_kl = target_kl  # was 0.01
+        self.clip_ratio = clip_ratio  # was 0.2
+        self.target_kl = target_kl  # was 0.005
         self.entropy_coef = entropy_coef  # was 0.02 originally
         self.counter = 0
         self.decision_start_token_id = 1
@@ -130,23 +180,26 @@ class PPO_Constrained_MultiTask(AbstractTask):
         self.curr_epoch = 0
 
         # Population
-        self.population = [[] for _ in range(self.num_tasks)]
-        self.hv = [[] for _ in range(self.num_tasks)]
+        self.population = []
+        self.hv = []
+        self.nfes = []
 
         # Results
-        self.plot_freq = 50
-        self.performance_returns = []
-        self.constraint_returns = []
+        self.plot_freq = plot_freq
 
         # Objective Weights
         num_keys = 9
+        # self.objective_weights = list(np.linspace(0.1, 0.9, num_keys))
         self.objective_weights = list(np.linspace(0.05, 0.95, num_keys))
+        # self.objective_weights = list(np.linspace(0.0, 1.0, num_keys))
 
         # Tasks
-        self.tasks = [i for i in range(len(self.problem.train_problems))]
-        self.run_tasks = [i for i in range(self.num_tasks)]
+        # self.run_tasks = [val_task]
+        self.run_tasks = target_tasks # Training Tasks
+        self.val_task = target_tasks.pop(val_task_num)
 
         # GA Comparison Data
+        # self.uniform_ga = self.init_comparison_data()
         self.uniform_ga = []
 
         # Pretrain save dir
@@ -156,17 +209,42 @@ class PPO_Constrained_MultiTask(AbstractTask):
         self.actor_pretrain_save_path = os.path.join(self.pretrain_save_dir, 'actor_weights')
         self.critic_pretrain_save_path = os.path.join(self.pretrain_save_dir, 'critic_weights')
 
+    def init_comparison_data(self):
+        print('--> RUNNING GA')
+        task_runner = GA_Constrained_Task(
+            run_num=self.run_num,
+            problem=problem,
+            limit=100000,
+            c_type='uniform',
+            max_nfe=10000,
+            problem_num=self.val_task,
+            run_val=True,
+            pop_size=100,
+            offspring_size=100
+        )
+        performance = task_runner.run()
+        return performance
+
 
     def build(self):
 
         # Optimizer parameters
-        self.actor_learning_rate = actor_learning_rate  # 0.0001
-        self.critic_learning_rate = critic_learning_rate  # 0.0001
-        self.train_actor_iterations = train_actor_iterations  # was 250
-        self.train_critic_iterations = train_critic_iterations  # was 40
+        self.actor_learning_rate = 0.00005  # 0.0001
+        self.critic_learning_rate = 0.0001  # 0.0001
+        self.train_actor_iterations = 250  # was 250
+        self.train_critic_iterations = 40  # was 40
         self.beta_1 = 0.9
         if self.run_val is False:
             self.beta_1 = 0.0
+
+        if use_actor_warmup is True:
+            self.actor_learning_rate = tf.keras.optimizers.schedules.CosineDecay(
+                0.0,  # initial learning rate
+                1000,  # decay_steps
+                alpha=1.0,
+                warmup_target=self.actor_learning_rate,
+                warmup_steps=500
+            )
 
         # Optimizers
         if self.actor_optimizer is None:
@@ -180,10 +258,15 @@ class PPO_Constrained_MultiTask(AbstractTask):
 
         self.c_actor, self.c_critic = get_model(self.actor_load_path, self.critic_load_path)
 
-        # t_actor_save_path = os.path.join(self.run_dir, 'actor_weights_init')
-        # t_critic_save_path = os.path.join(self.run_dir, 'critic_weights_init')
-        # self.c_actor.save_weights(t_actor_save_path)
-        # self.c_critic.save_weights(t_critic_save_path)
+        # Freeze weights
+        if freeze_actor_base is True:
+            self.c_actor.decoder_1.trainable = False
+            self.c_actor.decoder_2.trainable = False
+        if freeze_critic_base is True:
+            self.c_critic.decoder_1.trainable = False
+
+        self.c_actor.summary()
+
 
     def run(self):
         self.build()
@@ -191,54 +274,46 @@ class PPO_Constrained_MultiTask(AbstractTask):
         for x in range(self.epochs):
             self.curr_epoch = x
             epoch_info = self.fast_mini_batch()
-
-            # Prune population for tasks ran
-            # for task_key in epoch_info['tasks']:
-            #     self.prune_population(task_key)
-
             self.record(epoch_info)
 
-            if self.curr_epoch % save_freq == 0:
+            if self.curr_epoch % 100 == 0:
                 t_actor_save_path = os.path.join(self.pretrain_save_dir, 'actor_weights_' + str(self.curr_epoch))
                 t_critic_save_path = os.path.join(self.pretrain_save_dir, 'critic_weights_' + str(self.curr_epoch))
                 self.c_actor.save_weights(t_actor_save_path)
                 self.c_critic.save_weights(t_critic_save_path)
 
-
-        # Save the parameters of the current actor and critic
-        self.c_actor.save_weights(self.actor_pretrain_save_path)
-        self.c_critic.save_weights(self.critic_pretrain_save_path)
-
     # -------------------------------------
     # Population Functions
     # -------------------------------------
 
-    def calc_pop_hv(self, task_num):
-        objectives = self.eval_population(task_num)
+    def calc_pop_hv(self):
+        objectives = self.eval_population()
 
         feasible_objectives = []
-        for design, d_objectives in zip(self.population[task_num], objectives):
+        for design, d_objectives in zip(self.population, objectives):
             if design.is_feasible is True:
                 feasible_objectives.append(d_objectives)
+        if len(feasible_objectives) <= 1:
+            return 0.0
 
         F = np.array(feasible_objectives)
         hv = self.hv_client.do(F)
         return hv
 
-    def eval_population(self, task_num):
+    def eval_population(self):
         evals = []
-        for design in self.population[task_num]:
+        for design in self.population:
             evals.append(design.evaluate())
         return evals
 
-    def prune_population(self, task_num):
+    def prune_population(self):
 
-        # 0. Get Objectives
-        objectives = self.eval_population(task_num)
-        feasibility_scores = [design.feasibility_score for design in self.population[task_num]]
-        is_feasible = [design.is_feasible for design in self.population[task_num]]
+        # 1. Get Objectives
+        objectives = self.eval_population()
+        feasibility_scores = [design.feasibility_score for design in self.population]
+        is_feasible = [design.is_feasible for design in self.population]
 
-        # 1. Determine survivors
+        # 2. Determine survivors
         fronts = self.custom_dominance_sorting(objectives, feasibility_scores, is_feasible)
         survivors = []
         exit_loop = False
@@ -250,12 +325,13 @@ class PPO_Constrained_MultiTask(AbstractTask):
                     break
             if exit_loop is True:
                 break
+        perished = [idx for idx in range(len(self.population)) if idx not in survivors]
 
-        # 2. Update population (sometimes the first front is larger than pop_size)
+        # 3. Update population (sometimes the first front is larger than pop_size)
         new_population = []
         for idx in survivors:
-            new_population.append(self.population[task_num][idx])
-        self.population[task_num] = new_population
+            new_population.append(self.population[idx])
+        self.population = new_population
 
     def custom_dominance_sorting(self, objectives, deviations, in_stiffness_window):
         """
@@ -366,45 +442,83 @@ class PPO_Constrained_MultiTask(AbstractTask):
         # --- Token weight selection --- #
         # Want weight tensor of shape: (mini_batch_size, 2)
 
-        # Uniform weight sampling
-        # weight_samples = random.sample(self.objective_weights, num_weight_samples)
-
-        # Bimodal weight sampling
-        half_point = int(len(self.objective_weights) / 2)
-        objective_weights_bottom_half = self.objective_weights[:half_point]
-        objective_weights_top_half = self.objective_weights[half_point:]
-        half_samples = int(num_weight_samples / 2)
+        # Weight sampling
+        num_weight_samples = get_num_weight_samples(self.curr_epoch)
+        num_task_samples = get_num_task_samples(self.curr_epoch)
+        repeat_size = get_repeat_size(self.curr_epoch)
         weight_samples = []
-        weight_samples.extend(random.sample(objective_weights_bottom_half, half_samples))
-        weight_samples.extend(random.sample(objective_weights_top_half, half_samples))
+        if uniform_sampling is True:
+            weight_samples = random.sample(self.objective_weights, num_weight_samples)
+        elif bimodal_sampling is True:
+            # Bimodal weight sampling
+            half_point = int(len(self.objective_weights) / 2)
+            objective_weights_bottom_half = self.objective_weights[:half_point]
+            objective_weights_top_half = self.objective_weights[half_point:]
+            half_samples = int(num_weight_samples / 2)
+            weight_samples = []
+            weight_samples.extend(random.sample(objective_weights_bottom_half, half_samples))
+            weight_samples.extend(random.sample(objective_weights_top_half, half_samples))
+        elif bimodal_alternating_sampling is True:
+            half_point = int(len(self.objective_weights) / 2)
+            objective_weights_bottom_half = self.objective_weights[:half_point]
+            objective_weights_top_half = self.objective_weights[half_point:]
+            if self.curr_epoch % 2 == 0:
+                weight_samples = random.sample(objective_weights_bottom_half, num_weight_samples)
+            else:
+                weight_samples = random.sample(objective_weights_top_half, num_weight_samples)
+        elif trimodal_sampling is True:
+            # Trimodal weight sampling
+            third_point = int(len(self.objective_weights) / 3)
+            objective_weights_bottom_third = self.objective_weights[:third_point]
+            objective_weights_middle_third = self.objective_weights[third_point:third_point * 2]
+            objective_weights_top_third = self.objective_weights[third_point * 2:]
+            third_samples = int(num_weight_samples / 3)
+            weight_samples = []
+            weight_samples.extend(random.sample(objective_weights_bottom_third, third_samples))
+            weight_samples.extend(random.sample(objective_weights_middle_third, third_samples))
+            weight_samples.extend(random.sample(objective_weights_top_third, third_samples))
 
-
-
-
+        # Task sampling (one validation task)
         task_samples = random.sample(self.run_tasks, num_task_samples)
+
+        constraint_weight = get_constraint_weight(self.curr_epoch)
+        if constraint_weight == 0:
+            attention_mask = [1, 0]
+        else:
+            attention_mask = [1, 1]
+
+
+        # Construct conditioning tensor
+        cross_obs_masks = []
         cross_obs_vars = []
         weight_samples_all = []
         task_samples_all = []
-        for task in task_samples:
-            task_cond_vars = self.problem.train_problems_norm[task]
+        for task, task_norm in task_samples:
             for weight in weight_samples:
-                cross_obs_vars.append([weight, task_cond_vars[1], task_cond_vars[2], task_cond_vars[3]])
+                sample_vars = [weight, task_norm]
+                if len(sample_vars) > num_conditioning_vars:
+                    sample_vars = sample_vars[:num_conditioning_vars]
+                cross_obs_vars.append(sample_vars)
                 weight_samples_all.append(weight)
                 task_samples_all.append(task)
+                cross_obs_masks.append(attention_mask)
 
         weight_samples_all = [element for element in weight_samples_all for _ in range(repeat_size)]
         task_samples_all = [element for element in task_samples_all for _ in range(repeat_size)]
         cross_obs_vars = [element for element in cross_obs_vars for _ in range(repeat_size)]
+        cross_obs_masks = [element for element in cross_obs_masks for _ in range(repeat_size)]
 
         cross_obs_tensor = tf.convert_to_tensor(cross_obs_vars, dtype=tf.float32)
+        cross_obs_mask_tensor = tf.convert_to_tensor(cross_obs_masks, dtype=tf.float32)
 
-        return cross_obs_tensor, weight_samples_all, task_samples_all
+        return cross_obs_tensor, weight_samples_all, task_samples_all, cross_obs_mask_tensor
 
     def fast_mini_batch(self):
         children = []
 
-        all_perf_returns = []
-        all_constraint_returns = []
+        all_stiffness_ratio_deltas = []  # stiffness ratio delta
+        all_constraint_returns = []  # constraint return component of reward
+
         all_total_rewards = []
         all_actions = [[] for _ in range(self.mini_batch_size)]
         all_rewards = [[] for _ in range(self.mini_batch_size)]
@@ -417,14 +531,14 @@ class PPO_Constrained_MultiTask(AbstractTask):
         critic_observation_buffer = [[] for x in range(self.mini_batch_size)]
 
         # Get cross attention observation input
-        cross_obs_tensor, weight_samples_all, task_samples_all = self.get_cross_obs()
+        cross_obs_tensor, weight_samples_all, task_samples_all, cross_obs_mask_tensor = self.get_cross_obs()
 
         # -------------------------------------
         # Sample Actor
         # -------------------------------------
 
         for t in range(self.steps_per_design):
-            action_log_prob, action, all_action_log_probs, all_action_probs = self.sample_actor(observation, cross_obs_tensor)  # returns shape: (batch,) and (batch,)
+            action_log_prob, action, all_action_log_probs, all_action_probs = self.sample_actor(observation, cross_obs_tensor, cross_obs_mask_tensor)  # returns shape: (batch,) and (batch,)
             action_log_prob = action_log_prob.numpy().tolist()
             all_action_log_probs = all_action_log_probs.numpy().tolist()
             all_action_probs = all_action_probs.numpy().tolist()
@@ -448,15 +562,15 @@ class PPO_Constrained_MultiTask(AbstractTask):
                     epoch_designs.append(design_bitstr)
 
                     # Evaluate design
-                    reward, design_obj, perf_return, constraint_return = self.calc_reward(
+                    reward, design_obj, constraint_term, constraint_return = self.calc_reward(
                         design_bitstr,
                         weight_samples_all[idx],
-                        task_samples_all[idx]
+                        task_samples_all[idx],
+                        run_val=True
                     )
                     all_rewards[idx].append(reward)
-                    children.append(design_obj)
                     all_total_rewards.append(reward)
-                    all_perf_returns.append(perf_return)
+                    all_stiffness_ratio_deltas.append(constraint_term)
                     all_constraint_returns.append(constraint_return)
             else:
                 done = False
@@ -475,7 +589,7 @@ class PPO_Constrained_MultiTask(AbstractTask):
         # -------------------------------------
 
         # --- SINGLE CRITIC PREDICTION --- #
-        value_t = self.sample_critic(critic_observation_buffer, cross_obs_tensor)
+        value_t = self.sample_critic(critic_observation_buffer, cross_obs_tensor, cross_obs_mask_tensor)
         value_t = value_t.numpy().tolist()  # (30, 31)
         for idx, value in zip(range(self.mini_batch_size), value_t):
             last_reward = value[-1]
@@ -488,7 +602,6 @@ class PPO_Constrained_MultiTask(AbstractTask):
         proc_time = time.time()
         all_advantages = [[] for _ in range(self.mini_batch_size)]
         all_returns = [[] for _ in range(self.mini_batch_size)]
-        all_returns_mo = [[] for _ in range(self.mini_batch_size)]
         for idx in range(len(all_rewards)):
             rewards = np.array(all_rewards[idx])
             values = np.array(value_t[idx])
@@ -513,13 +626,12 @@ class PPO_Constrained_MultiTask(AbstractTask):
         observation_tensor = tf.convert_to_tensor(observation, dtype=tf.float32)
         action_tensor = tf.convert_to_tensor(all_actions, dtype=tf.int32)
         logprob_tensor = tf.convert_to_tensor(all_logprobs, dtype=tf.float32)
+        all_logprobs_tensor = tf.convert_to_tensor(all_logprobs_full, dtype=tf.float32)
+        all_probs_tensor = tf.convert_to_tensor(all_probs_full, dtype=tf.float32)
         advantage_tensor = tf.convert_to_tensor(all_advantages, dtype=tf.float32)
         critic_observation_tensor = tf.convert_to_tensor(critic_observation_buffer, dtype=tf.float32)
         return_tensor = tf.convert_to_tensor(all_returns, dtype=tf.float32)
         return_tensor = tf.expand_dims(return_tensor, axis=-1)
-
-        all_logprobs_tensor = tf.convert_to_tensor(all_logprobs_full, dtype=tf.float32)
-        all_probs_tensor = tf.convert_to_tensor(all_probs_full, dtype=tf.float32)
 
         # -------------------------------------
         # Train Actor
@@ -527,55 +639,65 @@ class PPO_Constrained_MultiTask(AbstractTask):
 
         curr_time = time.time()
         policy_update_itr = 0
-        for i in range(self.train_actor_iterations):
-            policy_update_itr += 1
-            kl, entr, policy_loss, actor_loss = self.train_actor(
-                observation_tensor,
-                action_tensor,
-                logprob_tensor,
-                advantage_tensor,
-                cross_obs_tensor,
-                all_logprobs_tensor,
-                all_probs_tensor
-            )
-            if kl > 1.5 * self.target_kl:
-                # Early Stopping
-                break
+        kl, entr, policy_loss, actor_loss = 0, 0, 0, 0
+        if update_actor is True:
+            for i in range(self.train_actor_iterations):
+                policy_update_itr += 1
+                kl, entr, policy_loss, actor_loss = self.train_actor(
+                    observation_tensor,
+                    action_tensor,
+                    logprob_tensor,
+                    advantage_tensor,
+                    cross_obs_tensor,
+                    cross_obs_mask_tensor,
+                    all_logprobs_tensor,
+                    all_probs_tensor
+                )
+                if kl > 1.5 * self.target_kl:
+                    # Early Stopping
+                    break
+            kl = kl.numpy()
+            entr = entr.numpy()
+            policy_loss = policy_loss.numpy()
+            actor_loss = actor_loss.numpy()
 
         # -------------------------------------
         # Train Critic
         # -------------------------------------
 
         curr_time = time.time()
-        for i in range(self.train_critic_iterations):
-            value_loss = self.train_critic(
-                critic_observation_tensor,
-                return_tensor,
-                cross_obs_tensor,
-            )
+        value_loss = 0
+        if update_critic is True:
+            for i in range(self.train_critic_iterations):
+                value_loss = self.train_critic(
+                    critic_observation_tensor,
+                    return_tensor,
+                    cross_obs_tensor,
+                    cross_obs_mask_tensor
+                )
+            value_loss = value_loss.numpy()
 
         # Update results tracker
         epoch_info = {
             'mb_return': np.mean(all_total_rewards),
-            'perf_return': np.mean(all_perf_returns),
             'constraint_return': np.mean(all_constraint_returns),
-            'c_loss': value_loss.numpy(),
-            'p_loss': policy_loss.numpy(),
+            'avg_str': np.mean(all_stiffness_ratio_deltas),
+            'c_loss': value_loss,
+            'p_loss': policy_loss,
             'p_iter': policy_update_itr,
-            'entropy': entr.numpy(),
-            'kl': kl.numpy(),
+            'entropy': entr,
+            'kl': kl,
             'tasks': list(set(task_samples_all)),
         }
 
-        # for task in task_samples_all:
-        #     child = children[task]
-        #     self.population[task].append(child)
+        # Update population
+        self.population.extend(children)
 
         return epoch_info
 
-    def calc_reward(self, bitstr, weight, task, run_val=False):
+    def calc_reward(self, bitstr, weight, task, run_val=True):
 
-        h_stiffness, v_stiffness, stiff_ratio, vol_frac, constraints = self.problem.evaluate(bitstr, problem_num=task, run_val=run_val)
+        h_stiffness, v_stiffness, stiff_ratio, vol_frac, constraints = self.problem.evaluate(bitstr, problem_num=problem_num, run_val=True)
         h_stiffness = float(h_stiffness)
         v_stiffness = float(v_stiffness)
         stiff_ratio = float(stiff_ratio)
@@ -590,15 +712,11 @@ class PPO_Constrained_MultiTask(AbstractTask):
         v_stiff_term = w1 * v_stiffness
         vol_frac_term = w2 * (1.0 - vol_frac)
         performance_term = v_stiff_term + vol_frac_term
-        performance_term = performance_term * perf_term_weight
+        performance_term = performance_term * get_performance_weight(self.curr_epoch)
 
         # -------------------------------------
         # Constraints
         # -------------------------------------
-        # 1. Feasibility
-        # 2. Connectivity
-        # 3. Stiffness Ratio
-
         # 1. Feasibility Term (minimize)
         feasibility_constraint = float(constraints[0])
         feasibility_term = (1.0 - feasibility_constraint)
@@ -607,41 +725,60 @@ class PPO_Constrained_MultiTask(AbstractTask):
         connectivity_constraint = float(constraints[1])
         connectivity_term = (1.0 - connectivity_constraint)
 
-        # 3. Stiffness Ratio Term (minimize)
-        in_stiffness_window = False
-        stiffness_ratio_delta = abs(self.problem.target_stiffness_ratio - stiff_ratio)
-        if stiffness_ratio_delta < self.problem.feasible_stiffness_delta:
-            in_stiffness_window = True
 
-        stiffness_ratio_term = 0.0
-        if in_stiffness_window is False:
-            stiffness_ratio_term = stiffness_ratio_delta
-            if stiffness_ratio_term > 1.0:
-                stiffness_ratio_term = 1.0
+        # 1. Clip term
+        stiffness_ratio_delta = abs(task - stiff_ratio)
+        stiffness_ratio_term = stiffness_ratio_delta
+        if stiffness_ratio_term > 3.0:
+            stiffness_ratio_term = 3.0
+
+
+        # 2. Determine distance from target
+        in_stiffness_window = False
+        stiffness_ratio_delta = abs(task - stiff_ratio)
+        if stiffness_ratio_term < (1.0 * str_delta):
+            in_stiffness_window = True
+            constraint_term = 0.0
+        else:
+            constraint_term = ((stiffness_ratio_delta / str_delta) * -1.0) * get_constraint_weight(self.curr_epoch)
+
 
         # -----------------------
         # --- Constraint Term ---
         # -----------------------
         # - /15.0 works best so far for untrained model
         # - testing for pretrained model
+        constraint_sum = stiffness_ratio_term  # (feasibility_term + connectivity_term + stiffness_ratio_term)
 
         # minimize constraint term
-        constraint_sum = (feasibility_term + connectivity_term + stiffness_ratio_term)
-        constraint_term = ((feasibility_term * fea_multiplier) + connectivity_term + (stiffness_ratio_term * str_multiplier))
-        constraint_term *= -1.0
-        constraint_term = constraint_term * get_constraint_weight(self.curr_epoch)
+        # constraint_term = stiffness_ratio_term  # (feasibility_term + connectivity_term + (stiffness_ratio_term*str_multiplier))
+        # constraint_term *= -1.0
+        # constraint_term = constraint_term * get_constraint_weight(self.curr_epoch)
+
 
         # maximize constraint term
         # - /= 10.0 overall and *3.0 STR term works best so far for pretrained model (run 215)
         # constraint_term = (feasibility_constraint + connectivity_constraint + ((1.0 - stiffness_ratio_term)*str_multiplier))
         # constraint_term = constraint_term * constraint_term_weight
 
+        # constraint_term = (1.0 / stiffness_ratio_term) * get_constraint_weight(self.curr_epoch)
+        # constraint_term = (1 - stiffness_ratio_term) * get_constraint_weight(self.curr_epoch)
+
+        # constraint_term = ((1 - stiffness_ratio_term) ** 201) * get_constraint_weight(self.curr_epoch)
+
+        # constraint_term = ((1 - stiffness_ratio_term) ** 3) * get_constraint_weight(self.curr_epoch)
+        # constraint_term = (stiffness_ratio_term * -1.0) * get_constraint_weight(self.curr_epoch)
+        # if in_stiffness_window is True:
+        #     constraint_term += 1.0
+
+
         # -------------------------------------
         # Actual Reward
         # -------------------------------------
 
         is_feasible = False
-        if feasibility_constraint == 1.0 and connectivity_constraint == 1.0 and in_stiffness_window is True:
+        # if feasibility_constraint == 1.0 and connectivity_constraint == 1.0 and in_stiffness_window is True:
+        if in_stiffness_window is True:
             is_feasible = True
             # reward = performance_term * perf_term_weight
         else:
@@ -651,47 +788,48 @@ class PPO_Constrained_MultiTask(AbstractTask):
         reward = performance_term + constraint_term
 
 
+
+
+
         # -------------------------------------
         # Create design
         # -------------------------------------
         design = Design(design_vector=[int(i) for i in bitstr], evaluator=self.problem, num_bits=self.steps_per_design,
-                        c_type=self.c_type, p_num=task, val=run_val, constraints=True)
+                        c_type=self.c_type, p_num=problem_num, val=run_val, constraints=True)
         design.is_feasible = is_feasible
         design.feasibility_score = (feasibility_constraint + connectivity_constraint + (1.0 - stiffness_ratio_delta)) * -1.0
         design.stiffness_ratio = stiff_ratio
         design.set_objectives(v_stiffness * -1.0, vol_frac)
         design.h_stiffness = h_stiffness
         design.evaluated = True
-        if bitstr not in self.unique_designs[task]:
-            self.unique_designs[task].add(bitstr)
-            self.unique_designs_vals[task].append([v_stiffness, vol_frac])
-            self.unique_designs_feasible[task].append(design.is_feasible)
-            self.nfes[task] += 1
-        if bitstr not in self.unique_designs_all:
-            self.unique_designs_all.add(bitstr)
+        if bitstr not in self.unique_designs:
+            self.unique_designs.add(bitstr)
+            self.unique_designs_vals.append([v_stiffness * -1.0, vol_frac])
+            self.unique_designs_feasible.append(design.is_feasible)
             self.nfe += 1
 
-        return reward, design, performance_term, constraint_sum
+        return reward, design, constraint_sum, constraint_term
 
     # -------------------------------------
     # Actor-Critic Functions
     # -------------------------------------
 
-    def sample_actor(self, observation, cross_obs):
+    def sample_actor(self, observation, cross_obs, cross_obs_mask):
         inf_idx = len(observation[0]) - 1  # all batch elements have the same length
         observation_input = deepcopy(observation)
         observation_input = tf.convert_to_tensor(observation_input, dtype=tf.float32)
         inf_idx = tf.convert_to_tensor(inf_idx, dtype=tf.int32)
-        return self._sample_actor(observation_input, cross_obs, inf_idx)
+        return self._sample_actor(observation_input, cross_obs, inf_idx, cross_obs_mask)
 
     @tf.function(input_signature=[
-        tf.TensorSpec(shape=(None, None), dtype=tf.float32),  # shape=(global_mini_batch_size, None)
-        tf.TensorSpec(shape=(None, config.num_conditioning_vars), dtype=tf.float32),  # shape=(global_mini_batch_size, 1)
-        tf.TensorSpec(shape=(), dtype=tf.int32)
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, num_conditioning_vars), dtype=tf.float32),
+        tf.TensorSpec(shape=(), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, num_conditioning_vars), dtype=tf.float32),
     ])
-    def _sample_actor(self, observation_input, cross_input, inf_idx):
+    def _sample_actor(self, observation_input, cross_input, inf_idx, cross_obs_mask):
         # print('sampling actor', inf_idx)
-        pred_probs = self.c_actor([observation_input, cross_input], training=use_actor_train_call)
+        pred_probs = self.c_actor.call2([observation_input, cross_input, cross_obs_mask], training=use_actor_train_call)  # shape (batch, seq_len, 2
 
         # Batch sampling
         all_token_probs = pred_probs[:, inf_idx, :]  # shape (batch, 2)
@@ -705,19 +843,20 @@ class PPO_Constrained_MultiTask(AbstractTask):
         actions_log_prob = next_bit_probs  # (batch,)
         return actions_log_prob, actions, all_token_log_probs, all_token_probs
 
-    def sample_critic(self, observation, parent_obs):
+    def sample_critic(self, observation, parent_obs, cross_obs_mask):
         inf_idx = len(observation[0]) - 1
         observation_input = tf.convert_to_tensor(observation, dtype=tf.float32)
         inf_idx = tf.convert_to_tensor(inf_idx, dtype=tf.int32)
-        return self._sample_critic(observation_input, parent_obs, inf_idx)
+        return self._sample_critic(observation_input, parent_obs, inf_idx, cross_obs_mask)
 
     @tf.function(input_signature=[
-        tf.TensorSpec(shape=(global_mini_batch_size, None), dtype=tf.float32),
-        tf.TensorSpec(shape=(global_mini_batch_size, config.num_conditioning_vars), dtype=tf.float32),
-        tf.TensorSpec(shape=(), dtype=tf.int32)
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, num_conditioning_vars), dtype=tf.float32),
+        tf.TensorSpec(shape=(), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, num_conditioning_vars), dtype=tf.float32),
     ])
-    def _sample_critic(self, observation_input, parent_input, inf_idx):
-        t_value = self.c_critic([observation_input, parent_input], training=use_critic_train_call)  # (batch, seq_len, 2)
+    def _sample_critic(self, observation_input, parent_input, inf_idx, cross_obs_mask):
+        t_value = self.c_critic.call2([observation_input, parent_input, cross_obs_mask], training=use_critic_train_call)  # (batch, seq_len, 2)
         t_value = t_value[:, :, 0]
         return t_value
         # t_value_stiff = t_value[:, :, 0]  # (batch, 1)
@@ -725,11 +864,12 @@ class PPO_Constrained_MultiTask(AbstractTask):
         # return t_value_stiff, t_value_vol
 
     @tf.function(input_signature=[
-        tf.TensorSpec(shape=(global_mini_batch_size, config.num_vars), dtype=tf.float32),
-        tf.TensorSpec(shape=(global_mini_batch_size, config.num_vars), dtype=tf.int32),
-        tf.TensorSpec(shape=(global_mini_batch_size, config.num_vars), dtype=tf.float32),
-        tf.TensorSpec(shape=(global_mini_batch_size, config.num_vars), dtype=tf.float32),
-        tf.TensorSpec(shape=(global_mini_batch_size, config.num_conditioning_vars), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, config.num_vars), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, config.num_vars), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, config.num_vars), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, config.num_vars), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, num_conditioning_vars), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, num_conditioning_vars), dtype=tf.float32),
         tf.TensorSpec(shape=(global_mini_batch_size, config.num_vars, 2), dtype=tf.float32),
         tf.TensorSpec(shape=(global_mini_batch_size, config.num_vars, 2), dtype=tf.float32),
     ])
@@ -739,20 +879,13 @@ class PPO_Constrained_MultiTask(AbstractTask):
             action_buffer,
             logprobability_buffer,
             advantage_buffer,
-            parent_buffer,
+            parent_buffer, cross_obs_mask,
             all_logprobability_buffer,
             all_probs_buffer
     ):
-        # print('-- TRAIN ACTOR --')
-        # print('observation buffer:', observation_buffer.shape)
-        # print('action buffer:', action_buffer.shape)
-        # print('logprob buffer:', logprobability_buffer.shape)
-        # print('advantage buffer:', advantage_buffer.shape)
-        # print('parent buffer:', parent_buffer.shape)
-        # print('pop vector:', pop_vector.shape)
 
         with tf.GradientTape() as tape:
-            pred_probs = self.c_actor([observation_buffer, parent_buffer], training=use_actor_train_call)  # shape: (batch, seq_len, 2)
+            pred_probs = self.c_actor.call2([observation_buffer, parent_buffer, cross_obs_mask], training=use_actor_train_call)  # shape: (batch, seq_len, 2)
             pred_log_probs = tf.math.log(pred_probs)  # shape: (batch, seq_len, 2)
             logprobability = tf.reduce_sum(
                 tf.one_hot(action_buffer, self.num_actions) * pred_log_probs, axis=-1
@@ -784,42 +917,45 @@ class PPO_Constrained_MultiTask(AbstractTask):
         self.actor_optimizer.apply_gradients(zip(policy_grads, self.c_actor.trainable_variables))
 
         #  KL Divergence
-        pred_probs = self.c_actor([observation_buffer, parent_buffer], training=use_actor_train_call)
-        pred_log_probs = tf.math.log(pred_probs)
-        logprobability = tf.reduce_sum(
-            tf.one_hot(action_buffer, self.num_actions) * pred_log_probs, axis=-1
-        )  # shape (batch, seq_len)
-        kl = tf.reduce_mean(
-            logprobability_buffer - logprobability
-        )
-        kl = tf.reduce_sum(kl)
+        # pred_probs = self.c_actor.call2([observation_buffer, parent_buffer, cross_obs_mask], training=use_actor_train_call)
+        # pred_log_probs = tf.math.log(pred_probs)
+        # logprobability = tf.reduce_sum(
+        #     tf.one_hot(action_buffer, self.num_actions) * pred_log_probs, axis=-1
+        # )  # shape (batch, seq_len)
+        # kl = tf.reduce_mean(
+        #     logprobability_buffer - logprobability
+        # )
+        # kl = tf.reduce_sum(kl)
 
-        #  KL Divergence
-        # pred_probs = self.c_actor([observation_buffer, parent_buffer], training=False)
-        # pred_log_probs = tf.math.log(pred_probs + 1e-10)  # shape (9, 280, 2)
-        # true_kl = tf.reduce_sum(
-        #     all_probs_buffer * (all_logprobability_buffer - pred_log_probs),
-        #     axis=-1
-        # )  # shape (9, 280)
-        # kl = tf.reduce_mean(true_kl)  # shape (1,)
+        # True KL Divergence
+        pred_probs = self.c_actor.call2([observation_buffer, parent_buffer, cross_obs_mask], training=use_actor_train_call)
+        pred_log_probs = tf.math.log(pred_probs + 1e-10)  # shape (9, 280, 2)
+        true_kl = tf.reduce_sum(
+            all_probs_buffer * (all_logprobability_buffer - pred_log_probs),
+            axis=-1
+        )  # shape (9, 280)
+        kl = tf.reduce_mean(true_kl)  # shape (1,)
 
         return kl, entr, policy_loss, loss
 
     @tf.function(input_signature=[
-        tf.TensorSpec(shape=(global_mini_batch_size, config.num_vars+1), dtype=tf.float32),
-        tf.TensorSpec(shape=(global_mini_batch_size, config.num_vars+1, 1), dtype=tf.float32),
-        tf.TensorSpec(shape=(global_mini_batch_size, config.num_conditioning_vars), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, config.num_vars+1), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, config.num_vars+1, 1), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, num_conditioning_vars), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, num_conditioning_vars), dtype=tf.float32),
     ])
     def train_critic(
             self,
             observation_buffer,
             return_buffer,
-            parent_buffer,
+            parent_buffer, cross_obs_mask
     ):
 
         with tf.GradientTape() as tape:  # Record operations for automatic differentiation.
-            pred_values = self.c_critic(
-                [observation_buffer, parent_buffer], training=use_critic_train_call)  # (batch, seq_len, 2)
+            pred_values = self.c_critic.call2(
+                [observation_buffer, parent_buffer, cross_obs_mask],
+                training=use_critic_train_call
+            )  # (batch, seq_len, 2)
 
             # Value Loss (mse)
             value_loss = tf.reduce_mean((return_buffer - pred_values) ** 2)
@@ -835,24 +971,26 @@ class PPO_Constrained_MultiTask(AbstractTask):
 
         # Record new epoch / print
         if self.debug is True:
-            print(f"Proc GA_Task {self.run_num} - {self.curr_epoch} ", end=' ')
+            print(f"Proc PPO_Task {self.run_num} - {self.curr_epoch} ", end=' ')
             for key, value in epoch_info.items():
                 if isinstance(value, list):
                     print(f"{key}: {value}", end=' | ')
                 else:
                     print("%s: %.5f" % (key, value), end=' | ')
-            print(sum(self.nfes))
-
+            print('')
 
         # Update metrics
         self.returns.append(epoch_info['mb_return'])
-        self.performance_returns.append(epoch_info['perf_return'])
         self.c_loss.append(epoch_info['c_loss'])
         self.p_loss.append(epoch_info['p_loss'])
         self.p_iter.append(epoch_info['p_iter'])
         self.entropy.append(epoch_info['entropy'])
         self.kl.append(epoch_info['kl'])
         self.constraint_returns.append(epoch_info['constraint_return'])
+        self.avg_str_values.append(epoch_info['avg_str'])
+        # self.constraint_term_history.append(get_constraint_weight(self.curr_epoch))
+        self.hv.append(self.calc_pop_hv())
+        self.nfes.append(self.nfe)
 
         if len(self.entropy) % self.plot_freq == 0:
             print('--> PLOTTING')
@@ -864,7 +1002,7 @@ class PPO_Constrained_MultiTask(AbstractTask):
 
         # --- Plotting ---
         epochs = [x for x in range(len(self.returns))]
-        gs = gridspec.GridSpec(3, 2)
+        gs = gridspec.GridSpec(4, 2)
         fig = plt.figure(figsize=(16, 12))  # default [6.4, 4.8], W x H  9x6, 12x8
         fig.suptitle('Results', fontsize=16)
 
@@ -902,19 +1040,43 @@ class PPO_Constrained_MultiTask(AbstractTask):
         plt.ylabel('KL')
         plt.title('KL Divergence Plot')
 
-        # Performance Returns plot
+        # HV Plot
         plt.subplot(gs[2, 0])
-        plt.plot(epochs, self.performance_returns)
-        plt.xlabel('Epoch')
-        plt.ylabel('Performance Return')
-        plt.title('Performance Return Plot')
+        plt.plot(self.nfes, self.hv, label='PPO HV (MultiTask)')
+        plt.plot([r[0] for r in self.uniform_ga], [r[1] for r in self.uniform_ga], label='Uniform GA HV')
+        plt.xlabel('NFE')
+        plt.ylabel('HV')
+        plt.title('Hypervolume Plot')
+        plt.legend()
 
-        # Constraint Returns plot
+        # Design Plot
         plt.subplot(gs[2, 1])
+        # for idx, obj_vals in enumerate(self.unique_designs_vals):
+        #     if self.unique_designs_feasible[idx] is False:
+        #         plt.scatter(obj_vals[0] * -1.0, obj_vals[1], color='grey', alpha=0.3)
+        for idx, obj_vals in enumerate(self.unique_designs_vals):
+            if self.unique_designs_feasible[idx] is True:
+                plt.scatter(obj_vals[0] * -1.0, obj_vals[1], color='blue')
+        plt.xlim(0, 1.1)
+        plt.ylim(0, 1.1)
+        plt.xlabel('Vertical Stiffness')
+        plt.ylabel('Volume Fraction')
+        plt.title('All Designs')
+
+        # Constraint Returns Plot
+        plt.subplot(gs[3, 0])
         plt.plot(epochs, self.constraint_returns)
         plt.xlabel('Epoch')
         plt.ylabel('Constraint Return')
         plt.title('Constraint Return Plot')
+
+        # Stiffness Ratio Delta Plot
+        plt.subplot(gs[3, 1])
+        plt.plot(epochs, self.avg_str_values)
+        plt.xlabel('Epoch')
+        plt.ylabel('Avg Stiffness Ratio Delta')
+        plt.title('Avg Stiffness Ratio Delta Plot')
+
 
         # Save and close
         plt.tight_layout()
@@ -924,6 +1086,14 @@ class PPO_Constrained_MultiTask(AbstractTask):
         plt.savefig(save_path)
         plt.close('all')
 
+        # HV file
+        hv_prog_file_path = os.path.join(self.run_dir, 'hv.json')
+        if self.run_val is True:
+            hv_prog_file_path = os.path.join(self.run_dir, 'hv_val_' + str(self.val_itr) + '.json')
+        hv_progress = [(n, h) for n, h in zip(self.nfes, self.hv)]
+        with open(hv_prog_file_path, 'w', encoding='utf-8') as file:
+            json.dump(hv_progress, file, ensure_ascii=False, indent=4)
+
 
 from problem.TrussProblem import TrussProblem
 
@@ -931,15 +1101,25 @@ if __name__ == '__main__':
     problem = TrussProblem(
         sidenum=config.sidenum,
         calc_constraints=True,
-        target_stiffness_ratio=target_stiffness_ratio,
-        feasible_stiffness_delta=feasible_stiffness_delta,
     )
 
+    # Multi-task unconstrained weights
+    # actor_save_path = os.path.join(config.results_dir, 'save', 'unconstrained', 'run_1004', 'actor_weights_val')
+    # critic_save_path = os.path.join(config.results_dir, 'save', 'unconstrained', 'run_1004', 'critic_weights_val')
+
+    # actor_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'actor_weights_400')
+    # critic_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'critic_weights_400')
+
+    # actor_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'actor_weights')
+    # critic_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'critic_weights')
+
+    actor_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'actor_weights_800')
+    critic_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'critic_weights_800')
 
     actor_save_path = None
     critic_save_path = None
 
-    alg = PPO_Constrained_MultiTask(
+    alg = PPO_Stiffness_MultiTask(
         run_num=run_dir,
         problem=problem,
         epochs=task_epochs,
@@ -949,6 +1129,23 @@ if __name__ == '__main__':
         c_type='uniform',
         run_val=True,
         val_itr=run_num,
-        num_tasks=num_tasks,  # Tested with 9 tasks, try upping substantially
+        val_task=problem_num
     )
     alg.run()
+
+
+    # for x in range(3, 30):
+    #     alg = PPO_Constrained_MultiTaskValidation(
+    #         run_num=run_dir,
+    #         problem=problem,
+    #         epochs=task_epochs,
+    #         actor_load_path=actor_save_path,
+    #         critic_load_path=critic_save_path,
+    #         debug=True,
+    #         c_type='uniform',
+    #         run_val=True,
+    #         val_itr=x,
+    #         val_task=0
+    #     )
+    #     alg.run()
+

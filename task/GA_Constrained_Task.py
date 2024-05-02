@@ -68,12 +68,11 @@ class GA_Constrained_Task(AbstractTask):
         self.max_nfe = max_nfe
         self.nfe = 0
         self.limit = limit
-        self.steps_per_design = 30  # 30 | 60
+        self.steps_per_design = config.num_vars  # 30 | 60
 
         # Population
         self.population = []
         self.hv = []         # hv progress over time
-        self.hv_window = []  # hv progress over time
         self.nfes = []       # nfe progress over time
 
         # Files
@@ -127,29 +126,30 @@ class GA_Constrained_Task(AbstractTask):
             update_delta = self.nfe - curr_nfe
             progress_bar.update(update_delta)
 
-            # if counter % 25 == 0:
-            #     # count the number of false values in self.unique_designs_feasible
-            #     num_false = len([x for x in self.unique_designs_feasible if x is False])
-            #     print('Num Infeasible Designs Found:', num_false)
+            if counter % 25 == 0:
+                # count the number of false values in self.unique_designs_feasible
+                num_false = len([x for x in self.unique_designs_feasible if x is True])
+                print('Num Feasible Designs Found:', num_false)
 
             # Print lowest siffness ratio difference
             # stiff_diffs = [abs(self.problem.target_stiffness_ratio - design.stiffness_ratio) for design in self.population]
             # print('Lowest Stiffness Ratio Difference:', min(stiff_diffs))
+            feasibility_scores = [design.feasibility_score for design in self.population]
+            # find index of lowest score
+            min_idx = feasibility_scores.index(min(feasibility_scores))
+            # print('Lowest Feasibility Score:', self.population[min_idx].constraint_vals)
 
 
 
         # 5. Save population
         self.save_population()
+        self.plot_comp()
 
         # 6. Save performance if file does not exist
         performance = [[nfe, hv] for hv, nfe in zip(self.hv, self.nfes)]
         if not os.path.exists(self.uniform_ga_file):
             with open(self.uniform_ga_file, 'w') as f:
                 json.dump(performance, f, indent=4)
-        # performance_window = [[nfe, hv] for hv, nfe in zip(self.hv_window, self.nfes)]
-        # if not os.path.exists(self.uniform_ga_file):
-        #     with open(self.uniform_ga_file, 'w') as f:
-        #         json.dump(performance_window, f, indent=4)
 
         num_false = len([x for x in self.unique_designs_feasible if x is False])
         print('Num Infeasible Designs Found:', num_false)
@@ -200,6 +200,8 @@ class GA_Constrained_Task(AbstractTask):
             self.population.append(design)
 
     def eval_population(self):
+        # self.eval_population_batch()
+
         evals = []
         for design in self.population:
             design_str = design.get_vector_str()
@@ -222,6 +224,29 @@ class GA_Constrained_Task(AbstractTask):
                 self.unique_designs_feasibility_score.append(deepcopy(design.feasibility_score))
                 self.unique_designs_stiffness_ratio.append(deepcopy(design.stiffness_ratio))
         return evals
+
+    def eval_population_batch(self):
+        batch_evals = []
+        for design in self.population:
+            design_str = design.get_vector_str()
+            if design.evaluated is False and design_str not in self.unique_designs:
+                self.nfe += 1
+                batch_evals.append(design)
+
+        if len(batch_evals) > 0:
+            # print('evaluating batch designs: ', len(batch_evals))
+            eval_vectors = [design.vector for design in batch_evals]
+            batch_vals = self.problem.evaluate_batch(eval_vectors, self.problem_num, self.run_val)
+            for idx, design in enumerate(batch_evals):
+                vals = design.set_evaluate(batch_vals[idx])
+                design_str = design.get_vector_str()
+                if design_str not in self.unique_designs:
+                    self.unique_designs.add(design_str)
+                    self.unique_designs_lst.append(design_str)
+                    self.unique_designs_vals.append(vals)
+                    self.unique_designs_feasible.append(deepcopy(design.is_feasible))
+                    self.unique_designs_feasibility_score.append(deepcopy(design.stiffness_ratio))
+                    self.unique_designs_stiffness_ratio.append(deepcopy(design.stiffness_ratio))
 
     def prune_population(self):
 
@@ -436,8 +461,59 @@ class GA_Constrained_Task(AbstractTask):
 
     def record(self, epoch_info):
         self.hv.append(self.calc_pop_hv())
-        # self.hv_window.append(self.calc_pop_hv_feasible())
         self.nfes.append(self.nfe)
+
+    def plot_comp(self):
+
+        gs = gridspec.GridSpec(3, 2)
+        fig = plt.figure(figsize=(16, 8))  # default [6.4, 4.8], W x H  9x6, 12x8
+        fig.suptitle('Results', fontsize=16)
+
+        plt.subplot(gs[0, 0])
+        plt.plot(self.nfes, self.hv)
+        plt.xlabel('NFE')
+        plt.ylabel('HV')
+        plt.title('HV Plot')
+
+        plt.subplot(gs[0, 1])
+        plt.plot(self.nfes, self.hv)
+        plt.xlabel('NFE')
+        plt.ylabel('HV')
+        plt.title('HV Plot')
+
+        plt.subplot(gs[1, 0])
+        plt.plot(self.nfes, self.hv)
+        plt.xlabel('NFE')
+        plt.ylabel('HV')
+        plt.title('HV Plot')
+
+        plt.subplot(gs[1, 1])
+        plt.plot(self.nfes, self.hv)
+        plt.xlabel('NFE')
+        plt.ylabel('HV')
+        plt.title('HV Plot')
+
+        plt.subplot(gs[2, 0])
+        plt.plot(self.nfes, self.hv)
+        plt.xlabel('NFE')
+        plt.ylabel('HV')
+        plt.title('HV Plot')
+
+        plt.subplot(gs[2, 1])
+        for idx, obj_vals in enumerate(self.unique_designs_vals):
+            if self.unique_designs_feasible[idx] is True:
+                plt.scatter(obj_vals[0] * -1.0, obj_vals[1], color='blue')
+        plt.xlim(0, 1.1)
+        plt.ylim(0, 1.1)
+        plt.xlabel('Vertical Stiffness')
+        plt.ylabel('Volume Fraction')
+        plt.title('All Designs')
+
+        plt.tight_layout()
+        save_path = os.path.join(self.run_dir, 'ga_comp.png')
+        plt.savefig(save_path)
+        plt.close('all')
+
 
     def plot(self):
 
@@ -449,24 +525,6 @@ class GA_Constrained_Task(AbstractTask):
         plt.title('HV Progress')
         plt.savefig(os.path.join(self.run_dir, self.c_type + '_hv_all.png'))
         plt.close('all')
-
-        # 1.2 Plot HV feasible
-        # plt.figure(figsize=(8, 8))
-        # plt.plot(self.nfes, self.hv_window)
-        # plt.xlabel('NFE')
-        # plt.ylabel('HV')
-        # plt.title('HV Progress')
-        # plt.savefig(os.path.join(self.run_dir, self.c_type + '_hv.png'))
-
-        # 2. Plot designs all
-        # plt.figure(figsize=(8, 8))
-        # for obj_vals in self.unique_designs_vals:
-        #     plt.scatter(obj_vals[0] * -1.0, obj_vals[1], color='blue')
-        # plt.xlabel('Vertical Stiffness')
-        # plt.ylabel('Volume Fraction')
-        # plt.title('Designs')
-        # plt.savefig(os.path.join(self.run_dir, self.c_type + '_designs_all.png'))
-        # plt.close('all')
 
         # 3. Plot designs feasible
         plt.figure(figsize=(8, 8))
@@ -487,7 +545,7 @@ class GA_Constrained_Task(AbstractTask):
 if __name__ == '__main__':
     # problem = ConstantTruss(n=30)
 
-    target_stiffness_ratio = 0.88  # was 1.0
+    target_stiffness_ratio = 1.0  # was 1.0
     feasible_stiffness_delta = 0.01  # was 0.01
 
     problem = Problem(
@@ -500,38 +558,38 @@ if __name__ == '__main__':
     problem_num = 0
     run_val = True
 
-    # task_runner = GA_Constrained_Task(
-    #     run_num=11,
-    #     problem=problem,
-    #     limit=100000,
-    #     c_type='uniform',
-    #     max_nfe=10000,
-    #     problem_num=problem_num,
-    #     run_val=run_val,
-    #     # save_num=0
-    #     pop_size=100,
-    #     offspring_size=100
-    # )
-    # task_runner.run()
-    # task_runner.plot()
+    task_runner = GA_Constrained_Task(
+        run_num=10,
+        problem=problem,
+        limit=100000,
+        c_type='uniform',
+        max_nfe=10000,
+        problem_num=problem_num,
+        run_val=run_val,
+        # save_num=0
+        pop_size=100,
+        offspring_size=100
+    )
+    task_runner.run()
+    task_runner.plot()
 
 
-    runs = 30
-    for save_num in range(1, runs):
-        task_runner = GA_Constrained_Task(
-            run_num=99,
-            problem=problem,
-            limit=100000,
-            c_type='uniform',
-            max_nfe=10000,
-            problem_num=problem_num,
-            run_val=run_val,
-            save_num=save_num,
-            pop_size=100,
-            offspring_size=100
-        )
-        performance = task_runner.run()
-        # task_runner.plot()
+    # runs = 30
+    # for save_num in range(1, runs):
+    #     task_runner = GA_Constrained_Task(
+    #         run_num=99,
+    #         problem=problem,
+    #         limit=100000,
+    #         c_type='uniform',
+    #         max_nfe=10000,
+    #         problem_num=problem_num,
+    #         run_val=run_val,
+    #         save_num=save_num,
+    #         pop_size=100,
+    #         offspring_size=100
+    #     )
+    #     performance = task_runner.run()
+    #     # task_runner.plot()
 
 
 

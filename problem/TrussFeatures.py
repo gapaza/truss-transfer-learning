@@ -23,14 +23,10 @@ import numpy as np
 # }
 node_positions = {}
 idx = 1
-for x in range(5):
-    for y in range(5):
+for x in range(config.sidenum):
+    for y in range(config.sidenum):
         node_positions[idx] = (x, y)
         idx += 1
-
-
-
-
 
 
 
@@ -74,14 +70,14 @@ class TrussFeatures:
             plt.plot([pos1[0], pos2[0]], [pos1[1], pos2[1]], 'k-')  # 'k-' for black lines
 
         # Set plot limits and labels
-        plt.xlim(-1, 5)
-        plt.ylim(-1, 5)
+        plt.xlim(-1, config.sidenum)
+        plt.ylim(-1, config.sidenum)
         plt.xlabel('X Position')
         plt.ylabel('Y Position')
         if temp is not None:
-            title = '5x5 Truss Structure Visualization ('+str(temp)+')\n'  # + bit_str
+            title = '3x3 Truss Structure Visualization ('+str(temp)+')\n'  # + bit_str
         else:
-            title = '5x5 Truss Structure Visualization\n'  # + bit_str
+            title = '3x3 Truss Structure Visualization\n'  # + bit_str
         plt.title(title)
         plt.grid(True)
         plt.gca().set_aspect('equal', adjustable='box')
@@ -98,7 +94,10 @@ class TrussFeatures:
             plt.subplots_adjust(bottom=0.3)
 
 
+        plt.savefig('truss.png')
+
         plt.show()
+
 
 
 
@@ -115,7 +114,6 @@ class TrussFeatures:
         # Filter the connectivity array based on the design boolean array
         filtered_conn_array = [connectivity_array[index] for index, decision in enumerate(design_boolean_array) if decision]
         return filtered_conn_array
-
 
     # ------------------------------------
     # Design Boolean Arrays
@@ -151,7 +149,6 @@ class TrussFeatures:
                     member_index += 1
 
         return complete_boolean_array_list
-
 
     # ------------------------------------
     # Connectivity Arrays
@@ -254,7 +251,6 @@ class TrussFeatures:
             if connectivity_array[i][0] == member[0] and connectivity_array[i][1] == member[1]:
                 return i
         return -1  # Return -1 if the member is not found
-
 
     # ------------------------------------
     # Calculate volume fraction
@@ -397,6 +393,9 @@ def ccw(A, B, C):
     return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
 
 def intersect(A, B, C, D):
+    # cannot share a common node
+    if A == C or A == D or B == C or B == D:
+        return False
     """Check if line segments AB and CD intersect."""
     return ccw(A, C, D) != ccw(B, C, D) and ccw(A, B, C) != ccw(A, B, D)
 
@@ -445,10 +444,9 @@ def estimate_intersection_volume(radius, angle_degrees):
 
     return V
 
-def get_connections_list():
-    sidenum = config.sidenum
+def get_connections_list(sidenum):
     problem = None
-    bits = config.num_vars
+    bits = TrussFeatures.get_member_count_repeatable(sidenum)
     bit_connections_list = []
     for i in range(bits):
         bit_list = [0 for _ in range(bits)]
@@ -460,7 +458,22 @@ def get_connections_list():
 
 
 
+
+
+
 if __name__ == '__main__':
+
+    design = '101000001110000010010100111001'
+    design = [int(x) for x in design]
+    sidenum = 3
+    problem = None
+    arch = TrussFeatures(design, sidenum, problem)
+    arch.visualize_design()
+    exit(0)
+
+
+
+
 
     # connections_list = get_connections_list()
     # print(connections_list)
@@ -477,6 +490,32 @@ if __name__ == '__main__':
     problem = None
 
 
+    connections_3x3 = get_connections_list(3)
+
+
+    connections_4x4 = get_connections_list(4)
+    connections_5x5 = get_connections_list(5)
+    connections_6x6 = get_connections_list(6)
+
+    print(connections_3x3)
+    exit(0)
+
+
+
+
+    # member_count = TrussFeatures.get_member_count_repeatable(3)
+    # print(member_count)  # 30
+    # member_count = TrussFeatures.get_member_count_repeatable(4)
+    # print(member_count)  # 108
+    # member_count = TrussFeatures.get_member_count_repeatable(5)
+    # print(member_count)  # 280
+    # member_count = TrussFeatures.get_member_count_repeatable(6)
+    # print(member_count)  # 600
+
+
+
+
+
     # design = [0 for x in range(config.num_vars)]
     # design[0] = 1
     # design[1] = 1
@@ -485,21 +524,21 @@ if __name__ == '__main__':
     # design[42] = 1
     # design[260] = 1
 
-    design = '0000001010100000000100000000011011110001000000010001000100000000001000000001000000000001111001000000010010000011001010000010000000111100000111010000000000000111100100000100000000000000000010001000000000010000001000000000000000000000000001000000000010000010100110000000000010010000'
-    design = [int(x) for x in design]
+    # design = '0000001010100000000100000000011011110001000000010001000100000000001000000001000000000001111001000000010010000011001010000010000000111100000111010000000000000111100100000100000000000000000010001000000000010000001000000000000000000000000001000000000010000010100110000000000010010000'
+    # design = [int(x) for x in design]
 
     # design = [1 for x in range(config.num_vars)]
     # for x in range(10, 15):
     #     design[x] = 1
 
 
-    design_str = ''.join([str(x) for x in design])
-
-
-    arch = TrussFeatures(design, sidenum, problem)
-    arch.visualize_design()
-
-    arch.calculate_volume_fraction_5x5()
+    # design_str = ''.join([str(x) for x in design])
+    #
+    #
+    # arch = TrussFeatures(design, sidenum, problem)
+    # arch.visualize_design()
+    #
+    # arch.calculate_volume_fraction_5x5()
 
 
 

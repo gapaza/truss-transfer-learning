@@ -32,8 +32,8 @@ critic_dropout = config.critic_dropout
 # Actor
 # ------------------------------------
 
-@keras.saving.register_keras_serializable(package="MultiTaskDecoder", name="MultiTaskDecoder")
-class MultiTaskDecoder(tf.keras.Model):
+@keras.saving.register_keras_serializable(package="MultiTaskDecoderV3", name="MultiTaskDecoderV3")
+class MultiTaskDecoderV3(tf.keras.Model):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.supports_masking = True
@@ -102,17 +102,36 @@ class MultiTaskDecoder(tf.keras.Model):
         )
         self.ft_activation = layers.Activation('softmax', dtype='float32')
 
+    # def call_constraint(self, inputs, training=False, mask=None):
+    #     design_sequences, weights = inputs
+    #
+    #     # 1. Weights
+    #     weight_seq = self.add_positional_encoding(weights)  # (batch, num_weights, embed_dim)
+    #
+    #     # 2. Embed design_sequences
+    #     design_sequences_embedded = self.design_embedding_layer(design_sequences, training=training)
+    #
+    #     # 3. Decoder Stack
+    #     decoded_design = design_sequences_embedded
+    #     decoded_design = self.decoder_1(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
+    #     decoded_design = self.decoder_2(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
+    #
+    #     # 4. Design Prediction Head
+    #     design_prediction_logits = self.design_prediction_head(decoded_design)
+    #     design_prediction = self.activation(design_prediction_logits)
+    #
+    #     # 5. Constraint Prediction Head
+    #     constraint_prediction = self.constraint_pooling(decoded_design)
+    #     constraint_prediction = self.constraint_hidden(constraint_prediction)
+    #     constraint_prediction = self.constraint_prediction_head(constraint_prediction)
+    #
+    #     return design_prediction, constraint_prediction
+
 
     def call(self, inputs, training=False, mask=None):
         design_sequences, weights = inputs
 
         # 1. Weights
-        # split off last weight
-        constraint_weight = weights[:, -1:]
-        constraint_weight = tf.expand_dims(constraint_weight, axis=-1)
-        constraint_weight = tf.tile(constraint_weight, [1, 1, self.embed_dim])
-        weights = weights[:, :-1]
-
         weight_seq = self.add_positional_encoding(weights)  # (batch, num_weights, embed_dim)
 
         # 2. Embed design_sequences
@@ -121,11 +140,14 @@ class MultiTaskDecoder(tf.keras.Model):
         # 3. Decoder Stack
         decoded_design = design_sequences_embedded
         decoded_design = self.decoder_1(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
-        decoded_design = self.decoder_2(decoded_design, encoder_sequence=constraint_weight, use_causal_mask=True, training=training)
-        # decoded_design = self.decoder_3(decoded_design, encoder_sequence=constraint_weight, use_causal_mask=True, training=training)
+        decoded_design = self.decoder_2(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
+        # decoded_design = self.decoder_3(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
         # decoded_design = self.decoder_4(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
         # decoded_design = self.decoder_5(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True)
 
+        # 3. Decoder Stack (no cross attention)
+        # decoded_design = self.decoder_1(decoded_design, use_causal_mask=True, training=training)
+        # decoded_design = self.decoder_2(decoded_design, use_causal_mask=True, training=training)
 
         # 4. Design Prediction Head
         if fine_tune_actor is False:
@@ -136,6 +158,11 @@ class MultiTaskDecoder(tf.keras.Model):
             decoded_design = self.ft_decoder(decoded_design, encoder_sequence=obj_weight_seq, use_causal_mask=True, training=training)
             design_prediction_logits = self.ft_design_prediction_head(decoded_design)
             design_prediction = self.ft_activation(design_prediction_logits)
+
+        # 5. Constraint Prediction Head
+        # constraint_prediction = self.constraint_pooling(decoded_design)
+        # constraint_prediction = self.constraint_hidden(constraint_prediction)
+        # constraint_prediction = self.constraint_prediction_head(constraint_prediction)
 
         return design_prediction  # For training
 
@@ -176,8 +203,8 @@ class MultiTaskDecoder(tf.keras.Model):
 # Critic
 # ------------------------------------
 
-@keras.saving.register_keras_serializable(package="MultiTaskDecoderCritic", name="MultiTaskDecoderCritic")
-class MultiTaskDecoderCritic(tf.keras.Model):
+@keras.saving.register_keras_serializable(package="MultiTaskDecoderCriticV3", name="MultiTaskDecoderCriticV3")
+class MultiTaskDecoderCriticV3(tf.keras.Model):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.supports_masking = True
@@ -206,7 +233,6 @@ class MultiTaskDecoderCritic(tf.keras.Model):
         self.normalize_first = False
         self.decoder_1 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.normalize_first, name='decoder_1', dropout=critic_dropout)
         # self.decoder_2 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.normalize_first, name='decoder_2')
-        # self.decoder_3 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.normalize_first, name='decoder_3')
 
         # Output Prediction Head
         self.output_modeling_head = layers.Dense(self.num_objectives, name='output_modeling_head')
@@ -228,11 +254,6 @@ class MultiTaskDecoderCritic(tf.keras.Model):
         design_sequences, weights = inputs
 
         # 1. Weights
-        constraint_weight = weights[:, -1:]
-        constraint_weight = tf.expand_dims(constraint_weight, axis=-1)
-        constraint_weight = tf.tile(constraint_weight, [1, 1, self.embed_dim])
-        weights = weights[:, :-1]
-
         weight_seq = self.add_positional_encoding(weights)
 
         # 2. Embed design_sequences
@@ -241,8 +262,7 @@ class MultiTaskDecoderCritic(tf.keras.Model):
         # 3. Decoder Stack
         decoded_design = design_sequences_embedded
         decoded_design = self.decoder_1(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
-        # decoded_design = self.decoder_2(decoded_design, encoder_sequence=constraint_weight, use_causal_mask=True, training=training)
-        # decoded_design = self.decoder_3(decoded_design, encoder_sequence=constraint_weight, use_causal_mask=True, training=training)
+        # decoded_design = self.decoder_2(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
 
         # 4. Output Prediction Head
         if fine_tune_critic is False:

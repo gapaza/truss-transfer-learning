@@ -9,6 +9,16 @@ from copy import deepcopy
 import pickle
 from py4j.java_gateway import JavaGateway
 from problem.TrussFeatures import TrussFeatures
+from problem.eval.VolFrac import VolFrac
+from multiprocessing import Pool
+
+
+
+def calc_vol_frac(params):
+    solution, sidenum, member_radius, side_length = params
+    # volume_fraction = TrussFeatures(solution, sidenum, None).calculate_volume_fraction_5x5(member_radius, side_length)
+    volume_fraction, num_intersections, features = VolFrac(sidenum, solution).evaluate(member_radius, side_length)
+    return volume_fraction
 
 
 
@@ -22,10 +32,18 @@ class TrussProblem:
         self.sidenum = sidenum
         if self.sidenum == 3:
             self.n = 30
+            self.feasibility_constraint_norm = 94
+        elif self.sidenum == 4:
+            self.n = 108
+            self.feasibility_constraint_norm = 1304
         elif self.sidenum == 5:
             self.n = 280  # TODO: get the actual value
+            self.feasibility_constraint_norm = 8942
+        elif self.sidenum == 6:
+            self.n = 600  # TODO: get the actual value
+            self.feasibility_constraint_norm = 41397
         else:
-            self.n = 30
+            raise ValueError('Invalid sidenum:', self.sidenum)
         self.calc_heuristics = calc_heuristics
         self.calc_constraints = calc_constraints
         self.target_stiffness_ratio = target_stiffness_ratio
@@ -66,7 +84,7 @@ class TrussProblem:
                 utils.normalize_val_from_list(self.side_lengths, val_problem[2]),
                 utils.normalize_val_from_list(self.youngs_modulus, val_problem[3])
             ])
-            print('Val Problem:', val_problem, 'Norm:', self.val_problems_norm[-1])
+            # print('Val Problem:', val_problem, 'Norm:', self.val_problems_norm[-1])
         # exit(0)
 
 
@@ -98,11 +116,13 @@ class TrussProblem:
         # -----------------------------
         # Normalization Values
         # -----------------------------
+
+
         self.h_stiffness_norms_val = []
         self.v_stiffness_norms_val = []
         self.vol_frac_norms_val = []
         for problem_num in range(len(self.val_problems)):
-            print('Calculating norm values for val problem:', problem_num)
+            # print('Calculating norm values for val problem:', problem_num)
             vals = self.calc_norm_values(problem_num=problem_num, run_val=True)
             self.h_stiffness_norms_val.append(vals[0])
             self.v_stiffness_norms_val.append(vals[1])
@@ -112,13 +132,154 @@ class TrussProblem:
         self.v_stiffness_norms_train = []
         self.vol_frac_norms_train = []
         for problem_num in range(len(self.train_problems)):
-            print('Calculating norm values for problem:', problem_num)
+            # print('Calculating norm values for problem:', problem_num)
             vals = self.calc_norm_values(problem_num=problem_num)
             self.h_stiffness_norms_train.append(vals[0])
             self.v_stiffness_norms_train.append(vals[1])
             self.vol_frac_norms_train.append(vals[2])
 
 
+        # --> Worker Pool
+        self.pool = Pool(processes=6)
+
+
+    # -----------------------------
+    # Evaluate Batch
+    # -----------------------------
+
+    def evaluate_batch(self, solutions, problem_num=0, run_val=False):
+        conv_solns = []
+        for sol in solutions:
+            if type(sol) == str:
+                sol = [int(i) for i in sol]
+            conv_solns.append(sol)
+        solutions = conv_solns
+
+        # 1. Get norm values
+        if run_val:
+            h_norm = self.h_stiffness_norms_val[problem_num]
+            v_norm = self.v_stiffness_norms_val[problem_num]
+            vol_norm = self.vol_frac_norms_val[problem_num]
+        else:
+            h_norm = self.h_stiffness_norms_train[problem_num]
+            v_norm = self.v_stiffness_norms_train[problem_num]
+            vol_norm = self.vol_frac_norms_train[problem_num]
+        if h_norm == 0 or v_norm == 0 or vol_norm == 0:
+            if run_val:
+                params = self.val_problems[problem_num]
+            else:
+                params = self.train_problems[problem_num]
+            s_fname = 'norm_values_' + '_'.join([str(i) for i in params]) + '_' + str(self.n) + '.pkl'
+            print('Norm values are zero for file:', s_fname)
+            exit(0)
+
+        # 2. Evaluate
+        batch_returns = self._evaluate_batch(solutions, problem_num=problem_num, run_val=run_val)
+        # print('--------> BATCH:', batch_returns)
+
+        # 3. Bath results
+        batch_results = []
+        for returns in batch_returns:
+            h = returns[0]
+            v = returns[1]
+            sr = returns[2]
+            vol = returns[3]
+            constraints = None
+            if self.calc_constraints:
+                constraints = [returns[4], returns[5]]
+
+            if h > h_norm:
+                h = h_norm
+            h = h / h_norm
+
+            if v > v_norm:
+                v = v_norm
+            v = v / v_norm
+
+            if vol > vol_norm:
+                vol = vol_norm
+            vol = vol / vol_norm
+
+            # 4. Correct for training
+            # if config.sidenum == 3:
+            if v <= 0.0:
+                vol = 1.0
+            if vol >= 1.0:
+                v = 0.0
+
+            batch_results.append([h, v, sr, vol, constraints])
+
+        return batch_results
+
+    def _evaluate_batch(self, solutions, problem_num=0, run_val=False):
+        conv_solns = []
+        for sol in solutions:
+            if type(sol) == str:
+                sol = [int(i) for i in sol]
+            conv_solns.append(sol)
+        solutions = conv_solns
+
+        # Prepopulation solution results
+        if self.calc_constraints is False:
+            def_results = [[0.0, 0.0, 0.0, 1.0] for i in range(len(solutions))]
+        else:
+            def_results = [[0.0, 0.0, 0.0, 1.0, 0.0, 0.0] for i in range(len(solutions))]
+        used_indices = []
+        for soln in solutions:
+            if sum(soln) == 0:
+                used_indices.append(0)
+            else:
+                used_indices.append(1)
+
+        # 1. Get problem parameters
+        if run_val:
+            params = self.val_problems[problem_num]
+        else:
+            params = self.train_problems[problem_num]
+        java_list_designs = self.gateway.jvm.java.util.ArrayList()
+        for used, sol in zip(used_indices, solutions):
+            if used == 1:
+                java_list_designs.append(self.convert_design(sol))
+
+        # 2. Evaluate
+        objectives = self.my_java_object.evaluateDesignsBatch(
+            java_list_designs,
+            params[0],  # problem type
+            float(self.sidenum),
+            params[1],  # member radius
+            params[2],  # side length
+            params[3],  # young's modulus
+            self.calc_constraints,
+            self.calc_heuristics
+        )
+        objectives = list(objectives)
+        # print('---> BATCH SOURCE:', objectives)
+
+        # Evaluate volume fractions
+        vol_frac_params = []
+        for sol in solutions:
+            vol_frac_params.append([sol, self.sidenum, params[1], params[2]])
+        vol_fracs = self.pool.map(calc_vol_frac, vol_frac_params)
+
+
+        # Gather returns
+        all_returns = []
+        for idx, used in enumerate(used_indices):
+            if used == 0:
+                all_returns.append(def_results[idx])
+            else:
+                obj = objectives.pop(0)
+                h_stiffness = float(obj[0])
+                v_stiffness = float(obj[1])
+                stiffness_ratio = float(obj[2])
+                # volume_fraction = float(obj[3])
+                volume_fraction = vol_fracs[idx]
+                returns = [h_stiffness, v_stiffness, stiffness_ratio, volume_fraction]
+                if self.calc_constraints is True:
+                    returns.append(float(obj[4]))
+                    returns.append(float(obj[5]))
+                all_returns.append(returns)
+        return all_returns
 
 
     # -----------------------------
@@ -141,7 +302,8 @@ class TrussProblem:
 
         # 2. Evaluate
         returns = self._evaluate(solution, problem_num=problem_num, run_val=run_val)
-        # print('Returns:', returns)
+        # print('--------> SINGLE:', returns)
+
         h = returns[0]
         v = returns[1]
         sr = returns[2]
@@ -161,18 +323,15 @@ class TrussProblem:
             exit(0)
         if h > h_norm:
             h = h_norm
-        else:
-            h = h / h_norm
+        h = h / h_norm
 
         if v > v_norm:
             v = v_norm
-        else:
-            v = v / v_norm
+        v = v / v_norm
 
         if vol > vol_norm:
             vol = vol_norm
-        else:
-            vol = vol / vol_norm
+        vol = vol / vol_norm
 
         # 4. Correct for training
         # if config.sidenum == 3:
@@ -181,8 +340,7 @@ class TrussProblem:
         if vol >= 1.0:
             v = 0.0
 
-        return h, v, sr, vol, constraints
-
+        return h, v, sr, vol, constraints, returns[-1]
 
     def _evaluate(self, solution, problem_num=0, run_val=False):
         # problem_num: the train_problem instance to use
@@ -199,9 +357,9 @@ class TrussProblem:
 
         if sum(solution) == 0:
             if self.calc_constraints is False:
-                return [0.0, 0.0, 0.0, 1.0]
+                return [0.0, 0.0, 10.0, 1.0]  # Make stiffness reatio large for penalty
             else:
-                return [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+                return [0.0, 0.0, 10.0, 1.0, 0.0, 0.0]
 
         # 1. Get problem parameters
         if run_val:
@@ -223,15 +381,20 @@ class TrussProblem:
             self.calc_heuristics
         )
         objectives = list(objectives)
+        # print('---> SINGLE SOURCE:', ''.join([str(x) for x in solution]), objectives)
+
         h_stiffness = float(objectives[0])
         v_stiffness = float(objectives[1])
         stiffness_ratio = float(objectives[2])
         # volume_fraction = float(objectives[3])
-        volume_fraction = TrussFeatures(solution, self.sidenum, None).calculate_volume_fraction_5x5(params[1], params[2])
+        # volume_fraction = TrussFeatures(solution, self.sidenum, None).calculate_volume_fraction_5x5(params[1], params[2])
+        volume_fraction, num_intersections, features = VolFrac(self.sidenum, solution).evaluate(params[1], params[2])
         returns = [h_stiffness, v_stiffness, stiffness_ratio, volume_fraction]
         if self.calc_constraints is True:
-            returns.append(float(objectives[4]))
+            # returns.append(float(objectives[4]))
+            returns.append(float(num_intersections))
             returns.append(float(objectives[5]))
+        returns.append(features)
         return returns
 
     def convert_design(self, design):
@@ -275,12 +438,12 @@ class TrussProblem:
 
         # -- Check if norm values have already been calculated --
         s_fname = 'norm_values_' + '_'.join([str(i) for i in params]) + '_' + str(self.n) + '.pkl'
-        print('Checking for saved norm values:', s_fname)
+        # print('Checking for saved norm values:', s_fname)
         s_path = os.path.join(config.root_dir, 'problem', 'store', str(self.sidenum), s_fname)
         if os.path.exists(s_path):
-            print('--> USING SAVED NORM VALUES')
+            # print('--> USING SAVED NORM VALUES')
             vals = pickle.load(open(s_path, 'rb'))
-            print('Norm values', params, vals)
+            # print('Norm values', params, vals)
             return vals
 
         # -- Get designs to calc norm values from --
@@ -322,21 +485,65 @@ class TrussProblem:
         return vals
 
 
-
+import time
 if __name__ == '__main__':
-    truss = TrussProblem(sidenum=config.sidenum, calc_constraints=True)
+    truss = TrussProblem(
+        sidenum=config.sidenum,
+        calc_constraints=True,
+        target_stiffness_ratio=1.0,
+        feasible_stiffness_delta=0.01,
+    )
 
 
-    design = '0000001010100000000100000000011011110001000000010001000100000000001000000001000000000001111001000000010010000011001010000010000000111100000111010000000000000111100100000100000000000000000010001000000000010000001000000000000000000000000001000000000010000010100110000000000010010000'
-    design = [int(i) for i in design]
+    design = [1 for x in range(truss.n)]
+    # design = '101000001110000010010100111001'
+    results = truss.evaluate(design, problem_num=0, run_val=True)
+    print('Results:', results)  # 3x3 94 max overlaps, 4x4 ~ 1304 max overlaps, 5x5 ~ 8942 max overlaps, 6x6 ~ 41397 max overlaps
+
+
+
+
+
+
+    # design = '0000001010100000000100000000011011110001000000010001000100000000001000000001000000000001111001000000010010000011001010000010000000111100000111010000000000000111100100000100000000000000000010001000000000010000001000000000000000000000000001000000000010000010100110000000000010010000'
+    # design = [int(i) for i in design]
+
+
+
+
+    # designs = truss.sample_random_designs(100)
+    # curr_time = time.time()
+    # results = truss.evaluate_batch(designs, problem_num=0, run_val=True)
+    # print('BATCH Time:', time.time() - curr_time)
+    #
+    #
+    # curr_time = time.time()
+    # single_results = []
+    # for design in designs:
+    #     h, v, sr, vol, constraints = truss.evaluate(design, problem_num=0, run_val=True)
+    #     single_results.append([h, v, sr, vol, constraints])
+    # print('SINGLE Time:', time.time() - curr_time)
+    #
+    # # Validate results are the same between batch and single
+    # for i in range(len(results)):
+    #     if results[i] != single_results[i]:
+    #         print('Results are different')
+    #         print('Batch:', results[i])
+    #         print('Single:', single_results[i])
+    #         exit(0)
+    # print('SUCCESS')
+
+
+
+
 
     # design = [1 for x in range(truss.n)]
-    h, v, sr, vol, constraints = truss.evaluate(design, problem_num=0, run_val=True)
-    print('Horizontal Stiffness:', h)
-    print('Vertical Stiffness:', v)
-    print('Stiffness Ratio:', sr)
-    print('Volume Fraction:', vol)
-    print('Constraints:', constraints)
+    # h, v, sr, vol, constraints = truss.evaluate(design, problem_num=0, run_val=True)
+    # print('Horizontal Stiffness:', h)
+    # print('Vertical Stiffness:', v)
+    # print('Stiffness Ratio:', sr)
+    # print('Volume Fraction:', vol)
+    # print('Constraints:', constraints)
 
     #
     # designs = truss.sample_random_designs(3)

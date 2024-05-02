@@ -6,12 +6,17 @@ import json
 
 # CPU vs GPU
 import tensorflow as tf
-tf.config.set_visible_devices([], 'GPU')
-
-# num_threads = 8
+# tf.config.set_visible_devices([], 'GPU')
+#
+# num_threads = 50
 # tf.config.threading.set_inter_op_parallelism_threads(num_threads)
 # tf.config.threading.set_intra_op_parallelism_threads(num_threads)
 
+# from tensorflow.keras import mixed_precision
+# policy = mixed_precision.Policy('mixed_bfloat16')
+# mixed_precision.set_global_policy(policy)
+# import keras
+# keras.mixed_precision.set_global_policy("mixed_bfloat16")
 
 
 
@@ -44,21 +49,26 @@ results_save_dir_3 = os.path.join(results_dir, 'RUN3')
 bd_num_weight_vecs = 9
 bd_embed_dim = 16
 
-actor_embed_dim = 64
-actor_heads = 16
-actor_dense = 2048
+actor_embed_dim = 32
+actor_heads = 8
+actor_dense = 512
 actor_dropout = 0.0
 
-critic_embed_dim = 32
-critic_heads = 16
-critic_dense = 512
+# 3x3 Actor Vals: 16, 16, 256
+
+# Previous Actor Vals: 64, 32, 1024 (run_3, best so far)
+# Actor Vals: 32, 16, 512 (run_4, not great)
+# Actor Vals: 128, 32, 1024 (run_5)
+
+critic_embed_dim = 16
+critic_heads = 8
+critic_dense = 256
 critic_dropout = 0.0
 
 num_conditioning_vars = 4
 
 fine_tune_actor = False
 fine_tune_critic = False
-
 
 # Both Actor and Critic 32-512-32 for multi-task heavy constraint
 
@@ -71,10 +81,22 @@ fine_tune_critic = False
 hv_ref_point = [0, 1]  # vertical stiffness, volume fraction
 
 
-sidenum = 5  # 3 | 5
-num_vars = 280  # 30 | 280
+sidenum = 3  # 3 | 4 | 5 | 6
 
+# num_vars = 30  # 30 | 108 | 280 | 600
+if sidenum == 3:
+    num_vars = 30
+elif sidenum == 4:
+    num_vars = 108
+elif sidenum == 5:
+    num_vars = 280
+elif sidenum == 6:
+    num_vars = 600
+else:
+    raise ValueError('Invalid sidenum')
 
+# num_vars_nr (non-repeatable)
+num_vars_nr = 36
 
 
 

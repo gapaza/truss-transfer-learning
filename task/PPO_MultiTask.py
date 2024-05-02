@@ -28,20 +28,21 @@ def discounted_cumulative_sums(x, discount):
 
 num_weight_samples = 4
 num_task_samples = 6
-repeat_size = 3
+repeat_size = 1
 global_mini_batch_size = num_weight_samples * num_task_samples * repeat_size
 
 conditioning_vars = config.num_conditioning_vars
 
-plot_freq = 10
+plot_freq = 50
+save_freq = 50
 
 uniform_sampling = True
 bimodal_sampling = False
 bimodal_alternating_sampling = False
 
-run_dir = 3
+run_dir = 32
 run_num = 0
-task_epochs = 1000
+task_epochs = 10000
 val_task = 0
 
 random.seed(0)
@@ -49,7 +50,9 @@ tf.random.set_seed(0)
 
 use_actor_warmup = True
 
-pickup_epoch = 501
+pickup_epoch = 0
+
+time_sections = False
 
 
 class PPO_MultiTask(AbstractTask):
@@ -97,8 +100,8 @@ class PPO_MultiTask(AbstractTask):
         self.gamma = 0.99
         self.lam = 0.95
         self.clip_ratio = 0.2
-        self.target_kl = 0.001  # was 0.01
-        self.entropy_coef = 0.00  # was 0.02 originally
+        self.target_kl = 0.005  # was 0.01
+        self.entropy_coef = 0.02  # was 0.02 originally
         self.counter = 0
         self.decision_start_token_id = 1
         self.num_actions = 2
@@ -112,7 +115,7 @@ class PPO_MultiTask(AbstractTask):
         self.plot_freq = plot_freq
 
         # Objective Weights
-        num_keys = 18
+        num_keys = 9
         self.objective_weights = list(np.linspace(0.05, 0.95, num_keys))
 
         # Tasks
@@ -182,7 +185,7 @@ class PPO_MultiTask(AbstractTask):
 
             self.record(epoch_info)
 
-            if self.curr_epoch % 50 == 0:
+            if self.curr_epoch % save_freq == 0:
                 t_actor_save_path = os.path.join(self.pretrain_save_dir, 'actor_weights_' + str(self.curr_epoch + pickup_epoch))
                 t_critic_save_path = os.path.join(self.pretrain_save_dir, 'critic_weights_' + str(self.curr_epoch + pickup_epoch))
                 self.c_actor.save_weights(t_actor_save_path)
@@ -372,9 +375,10 @@ class PPO_MultiTask(AbstractTask):
                 weight_samples_all.append(weight)
                 task_samples_all.append(task)
 
-        weight_samples_all = [element for element in weight_samples_all for _ in range(repeat_size)]
-        task_samples_all = [element for element in task_samples_all for _ in range(repeat_size)]
-        cross_obs_vars = [element for element in cross_obs_vars for _ in range(repeat_size)]
+        if repeat_size > 1:
+            weight_samples_all = [element for element in weight_samples_all for _ in range(repeat_size)]
+            task_samples_all = [element for element in task_samples_all for _ in range(repeat_size)]
+            cross_obs_vars = [element for element in cross_obs_vars for _ in range(repeat_size)]
 
         cross_obs_tensor = tf.convert_to_tensor(cross_obs_vars, dtype=tf.float32)
 
@@ -398,8 +402,10 @@ class PPO_MultiTask(AbstractTask):
         # -------------------------------------
         # Sample Actor
         # -------------------------------------
+        curr_time = time.time()
 
         for t in range(self.steps_per_design):
+        # for t in tqdm(range(self.steps_per_design), desc='Generating Designs'):
             action_log_prob, action, all_action_probs = self.sample_actor(observation, cross_obs_tensor)  # returns shape: (batch,) and (batch,)
             action_log_prob = action_log_prob.numpy().tolist()
 
@@ -413,6 +419,7 @@ class PPO_MultiTask(AbstractTask):
 
             # Determine reward for each batch element
             if len(designs[0]) == self.steps_per_design:
+                # print('Sample Actor Time:', time.time() - curr_time)
                 done = True
                 for idx, design in enumerate(designs):
                     # Record design
@@ -494,7 +501,8 @@ class PPO_MultiTask(AbstractTask):
 
         curr_time = time.time()
         policy_update_itr = 0
-        for i in tqdm(range(self.train_actor_iterations), desc='Actor Training'):
+        for i in range(self.train_actor_iterations):
+        # for i in tqdm(range(self.train_actor_iterations), desc='Actor Training'):
             policy_update_itr += 1
             kl, entr, policy_loss, actor_loss = self.train_actor(
                 observation_tensor,
@@ -506,6 +514,7 @@ class PPO_MultiTask(AbstractTask):
             if kl > 1.5 * self.target_kl:
                 # Early Stopping
                 break
+        # print('Train Actor Time:', time.time() - curr_time)
 
         # -------------------------------------
         # Train Critic
@@ -530,8 +539,8 @@ class PPO_MultiTask(AbstractTask):
             'tasks': list(set(task_samples_all)),
         }
 
-        for task in task_samples_all:
-            self.population[task].append(children[task])
+        # for task in task_samples_all:
+        #     self.population[task].append(children[task])
 
         return epoch_info
 
@@ -617,7 +626,7 @@ class PPO_MultiTask(AbstractTask):
         tf.TensorSpec(shape=(), dtype=tf.int32)
     ])
     def _sample_critic(self, observation_input, parent_input, inf_idx):
-        t_value = self.c_critic([observation_input, parent_input])  # (batch, seq_len, 2)
+        t_value = self.c_critic([observation_input, parent_input])
         t_value = t_value[:, :, 0]
         return t_value
         # t_value_stiff = t_value[:, :, 0]  # (batch, 1)
@@ -740,7 +749,7 @@ class PPO_MultiTask(AbstractTask):
         self.kl.append(epoch_info['kl'])
 
         for task in epoch_info['tasks']:
-            self.hv[task].append(self.calc_pop_hv(task))
+            # self.hv[task].append(self.calc_pop_hv(task))
             self.task_nfes[task].append(self.nfes[task])
 
         if len(self.entropy) % self.plot_freq == 0:
@@ -805,11 +814,11 @@ from problem.TrussProblem import TrussProblem
 if __name__ == '__main__':
     problem = TrussProblem(sidenum=config.sidenum)
 
-    # actor_save_path = None
-    # critic_save_path = None
+    actor_save_path = None
+    critic_save_path = None
 
-    actor_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'actor_weights_500')
-    critic_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'critic_weights_500')
+    # actor_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'actor_weights_50')
+    # critic_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'critic_weights_50')
 
     alg = PPO_MultiTask(
         run_num=run_dir,
@@ -820,7 +829,7 @@ if __name__ == '__main__':
         debug=True,
         c_type='uniform',
         run_val=True,
-        val_itr=0,
+        val_itr=run_num,
         num_tasks=36,  # Tested with 9 tasks, try upping substantially
     )
     alg.run()

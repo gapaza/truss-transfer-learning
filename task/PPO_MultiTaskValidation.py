@@ -28,7 +28,7 @@ def discounted_cumulative_sums(x, discount):
 
 num_weight_samples = 4  # 4
 num_task_samples = 1  # 1
-repeat_size = 6  # 3
+repeat_size = 3  # 3
 global_mini_batch_size = num_weight_samples * num_task_samples * repeat_size
 
 conditioning_vars = config.num_conditioning_vars
@@ -36,15 +36,15 @@ conditioning_vars = config.num_conditioning_vars
 freeze_actor = False
 freeze_critic = False
 
-plot_freq = 10
+plot_freq = 50
 
 uniform_sampling = True
 bimodal_sampling = False
 bimodal_alternating_sampling = False
 
-run_dir = 3
-run_num = 2
-task_epochs = 1000
+run_dir = 20
+run_num = 1
+task_epochs = 200
 val_task = 0
 
 random.seed(0)
@@ -112,7 +112,7 @@ class PPO_MultiTaskValidation(AbstractTask):
         self.plot_freq = plot_freq
 
         # Objective Weights
-        num_keys = 18
+        num_keys = 9
         # self.objective_weights = list(np.linspace(0.1, 0.9, num_keys))
         self.objective_weights = list(np.linspace(0.05, 0.95, num_keys))
         # self.objective_weights = [0.5]
@@ -158,7 +158,7 @@ class PPO_MultiTaskValidation(AbstractTask):
                 100000,  # decay_steps
                 alpha=0.1,
                 warmup_target=self.actor_learning_rate,
-                warmup_steps=1000
+                warmup_steps=500
             )
 
         # Optimizers
@@ -873,42 +873,42 @@ if __name__ == '__main__':
     # actor_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'actor_weights_500')
     # critic_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'critic_weights_500')
 
-    actor_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'actor_weights_801')
-    critic_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'critic_weights_801')
+    actor_save_path = os.path.join(config.results_save_dir, 'run_' + str(3), 'pretrained', 'actor_weights_4850')  # 4850
+    critic_save_path = os.path.join(config.results_save_dir, 'run_' + str(3), 'pretrained', 'critic_weights_4850')  # 4850
 
     # actor_save_path = None
     # critic_save_path = None
 
 
-    alg = PPO_MultiTaskValidation(
-        run_num=run_dir,
-        problem=problem,
-        epochs=task_epochs,
-        actor_load_path=actor_save_path,
-        critic_load_path=critic_save_path,
-        debug=True,
-        c_type='uniform',
-        run_val=True,
-        val_itr=run_num,
-        val_task=val_task
-    )
-    alg.run()
+    # alg = PPO_MultiTaskValidation(
+    #     run_num=run_dir,
+    #     problem=problem,
+    #     epochs=task_epochs,
+    #     actor_load_path=actor_save_path,
+    #     critic_load_path=critic_save_path,
+    #     debug=True,
+    #     c_type='uniform',
+    #     run_val=True,
+    #     val_itr=run_num,
+    #     val_task=val_task
+    # )
+    # alg.run()
 
 
-    # runs = 30
-    # for x in range(30):
-    #     val_itr = 110 + x
-    #     alg = PPO_MultiTaskValidation(
-    #         run_num=run_dir,
-    #         problem=problem,
-    #         epochs=task_epochs,
-    #         actor_load_path=actor_save_path,
-    #         critic_load_path=critic_save_path,
-    #         debug=True,
-    #         c_type='uniform',
-    #         run_val=True,
-    #         val_itr=val_itr,
-    #         val_task=0
-    #     )
-    #     alg.run()
+    runs = 30
+    for x in range(1, 30):
+        val_itr = 110 + x
+        alg = PPO_MultiTaskValidation(
+            run_num=run_dir,
+            problem=problem,
+            epochs=task_epochs,
+            actor_load_path=actor_save_path,
+            critic_load_path=critic_save_path,
+            debug=True,
+            c_type='uniform',
+            run_val=True,
+            val_itr=val_itr,
+            val_task=val_task
+        )
+        alg.run()
 

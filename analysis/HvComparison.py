@@ -17,7 +17,7 @@ outdir = os.path.join(analysis_root, 'output')
 
 class HvComparison:
 
-    def __init__(self, analysis_dir='constrained_fibre'):
+    def __init__(self, analysis_dir='unconstrained_5x5'):
         self.nds = NonDominatedSorting()
         self.ref_point = np.array(config.hv_ref_point)  # science, cost
         self.hv_client = HV(self.ref_point)
@@ -443,7 +443,7 @@ if __name__ == '__main__':
     # rename_path = os.path.join(config.root_dir, 'results', 'save', 'ga_results')
     # rename_files(rename_path)
 
-    parse_dir = 'constrained_fibre'
+    parse_dir = 'unconstrained_5x5'
 
 
     hv_comparison = HvComparison(parse_dir)
@@ -452,11 +452,11 @@ if __name__ == '__main__':
     ga_label = 'NSGA-II'
 
 
-    ci_title = 'Validation 1.2: Generative Agent vs NSGA-II'
+    ci_title = '5x5 Truss Validation: Generative Agent vs NSGA-II'
     hv_comparison.run_ci_comparison(title=ci_title, rl_label=rl_label, ga_label=ga_label)
     # hv_comparison.run_3ci_comparison(title=ci_title, rl_label=rl_label, ga_label=ga_label, rl_label2='Generative Agent (random init)')
 
-    line_title = 'Validation 1.2: Generative Agent vs NSGA-II'
+    line_title = '5x5 Truss Validation: Generative Agent vs NSGA-II'
     hv_comparison.run_line_comparison(title=line_title, ga_label=ga_label)
 
 

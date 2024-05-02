@@ -40,7 +40,7 @@ application {
 }
 
 run {
-    environment 'DYLD_LIBRARY_PATH', '/Applications/MATLAB_R2023b.app/bin/maca64'
+    environment 'LD_LIBRARY_PATH', '/home/ec2-user/Matlab/bin/glnxa64:/home/ec2-user/Matlab/sys/os/glnxa64'
 }
 
 

@@ -18,7 +18,10 @@ import java.util.ArrayList;
 // import seakers.trussaos.problems.GabeArteryProblem;
 
 import seakers.trussaos.problems.TrussProblem;
+import seakers.trussaos.problems.TrussProblemTask;
+import seakers.trussaos.problems.MatlabEnginePool;
 
+import java.util.concurrent.ExecutorService;
 
 public class EvaluationTruss {
 
@@ -27,6 +30,10 @@ public class EvaluationTruss {
     public boolean debug = false;
     public int eval_count = 0;
 
+    public int num_engines = 1;
+    public MatlabEnginePool enginePool = null;
+    public ExecutorService executor = null;
+
     public EvaluationTruss(){
 
         // ------------------------------
@@ -34,12 +41,74 @@ public class EvaluationTruss {
         // ------------------------------
         this.newMatlabEngine();
 
+
         // ------------------------------
         // TrussProblem
         // ------------------------------
         this.problem = new TrussProblem(this.engine);
 
+        // ------------------------------
+        // Batch MATLAB
+        // ------------------------------
+        this.enginePool = new MatlabEnginePool(this.num_engines);
+        this.executor = Executors.newFixedThreadPool(this.num_engines);
+
     }
+
+    // ------------------------------
+    // Evaluate Designs Batch
+    // ------------------------------
+
+    public ArrayList<ArrayList<Double>> evaluateDesignsBatch(
+        ArrayList<ArrayList<Double>> designs,
+        int problem_num,
+        double sidenum,
+        double member_radius,
+        double member_length,
+        double y_modulus,
+        boolean calc_constraints,
+        boolean calc_heuristics
+    ){
+        // Convert to Integer
+        ArrayList<ArrayList<Integer>> all_designs = new ArrayList<ArrayList<Integer>>();
+        for (int i = 0; i < designs.size(); i++) {
+            ArrayList<Double> design_double = designs.get(i);
+            ArrayList<Integer> design = this.convertDesign(design_double);
+            all_designs.add(design);
+        }
+
+        // Submit futures
+        ArrayList<Future<Object>> futures = new ArrayList<Future<Object>>();
+        for(ArrayList<Integer> design : all_designs){
+            MatlabEngine task_engine = this.enginePool.getEngine();
+            TrussProblemTask task = new TrussProblemTask(
+                task_engine,
+                design,
+                problem_num,
+                sidenum,
+                member_length,
+                member_radius,
+                y_modulus,
+                calc_constraints,
+                calc_heuristics
+            );
+            Future<Object> future = this.executor.submit(task);
+            futures.add(future);
+        }
+
+        // Get results
+        ArrayList<ArrayList<Double>> results = new ArrayList<ArrayList<Double>>();
+        for(Future<Object> future : futures){
+            try {
+                ArrayList<Double> result = (ArrayList<Double>)(future.get());
+                results.add(result);
+            } catch (Exception e) {
+                System.out.println("Exception caught: " + e);
+            }
+        }
+        return results;
+    }
+
 
     // ------------------------------
     // Evaluate Design
@@ -63,8 +132,8 @@ public class EvaluationTruss {
             member_length,
             member_radius,
             y_modulus,
-            calc_heuristics,
-            calc_constraints
+            calc_constraints,
+            calc_heuristics
         );
 
         if(this.debug == true){
@@ -117,7 +186,7 @@ public class EvaluationTruss {
                 System.out.println("MATLAB engine closed.");
             }
             System.out.println("Starting MATLAB engine...");
-            String myPath = "/Users/gapaza/repos/seakers/truss/KDDMM/Truss_AOS";
+            String myPath = "/home/ec2-user/repos/KDDMM/Truss_AOS";
             this.engine = MatlabEngine.startMatlab();
             this.engine.eval("addpath('" + myPath + "')", null, null);
             this.engine.eval("warning('off', 'MATLAB:singularMatrix');");

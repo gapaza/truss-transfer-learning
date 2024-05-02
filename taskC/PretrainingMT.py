@@ -14,7 +14,7 @@ from task.AbstractTask import AbstractTask
 from problem.TrussDesign import TrussDesign as Design
 import scipy.signal
 from task.GA_Constrained_Task import GA_Constrained_Task
-from model import get_multi_task_decoder as get_model
+from modelC import get_multi_task_decoder as get_model
 from collections import OrderedDict
 import tensorflow_addons as tfa
 
@@ -31,7 +31,7 @@ repeat_size = 2
 global_mini_batch_size = num_weight_samples * num_task_samples * repeat_size
 
 # Run parameters
-run_dir = 0
+run_dir = 1
 run_num = 0
 plot_freq = 50
 save_freq = 50
@@ -50,7 +50,7 @@ entropy_coef = 0.02
 # Reward weight terms
 perf_term_weight = 1.0
 
-str_multiplier = 5.0  # was 3.0
+str_multiplier = 1.0  # was 3.0
 fea_multiplier = 5.0
 constraint_term_weights_epochs = [100]
 constraint_term_weights = [0.0, 0.0]  # was 0.05
@@ -68,14 +68,11 @@ train_critic_iterations = 40
 random.seed(0)
 tf.random.set_seed(0)
 
-
 def get_constraint_weight(epoch):
     for idx, threshold in enumerate(constraint_term_weights_epochs):
         if epoch <= threshold:
             return constraint_term_weights[idx]
     return constraint_term_weights[-1]
-
-
 
 class PPO_Constrained_MultiTask(AbstractTask):
 
@@ -184,6 +181,8 @@ class PPO_Constrained_MultiTask(AbstractTask):
         # t_critic_save_path = os.path.join(self.run_dir, 'critic_weights_init')
         # self.c_actor.save_weights(t_actor_save_path)
         # self.c_critic.save_weights(t_critic_save_path)
+
+        self.c_actor.summary()
 
     def run(self):
         self.build()
@@ -367,16 +366,16 @@ class PPO_Constrained_MultiTask(AbstractTask):
         # Want weight tensor of shape: (mini_batch_size, 2)
 
         # Uniform weight sampling
-        # weight_samples = random.sample(self.objective_weights, num_weight_samples)
+        weight_samples = random.sample(self.objective_weights, num_weight_samples)
 
         # Bimodal weight sampling
-        half_point = int(len(self.objective_weights) / 2)
-        objective_weights_bottom_half = self.objective_weights[:half_point]
-        objective_weights_top_half = self.objective_weights[half_point:]
-        half_samples = int(num_weight_samples / 2)
-        weight_samples = []
-        weight_samples.extend(random.sample(objective_weights_bottom_half, half_samples))
-        weight_samples.extend(random.sample(objective_weights_top_half, half_samples))
+        # half_point = int(len(self.objective_weights) / 2)
+        # objective_weights_bottom_half = self.objective_weights[:half_point]
+        # objective_weights_top_half = self.objective_weights[half_point:]
+        # half_samples = int(num_weight_samples / 2)
+        # weight_samples = []
+        # weight_samples.extend(random.sample(objective_weights_bottom_half, half_samples))
+        # weight_samples.extend(random.sample(objective_weights_top_half, half_samples))
 
 
 
@@ -785,7 +784,7 @@ class PPO_Constrained_MultiTask(AbstractTask):
 
         #  KL Divergence
         pred_probs = self.c_actor([observation_buffer, parent_buffer], training=use_actor_train_call)
-        pred_log_probs = tf.math.log(pred_probs)
+        pred_log_probs = tf.math.log(pred_probs + 1e-10)
         logprobability = tf.reduce_sum(
             tf.one_hot(action_buffer, self.num_actions) * pred_log_probs, axis=-1
         )  # shape (batch, seq_len)

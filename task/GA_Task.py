@@ -40,7 +40,10 @@ class GA_Task(AbstractTask):
             clip_pop=False,
             problem_num=0,
             run_val=False,
-            save_num=-1
+            save_num=-1,
+            pop_size=30,
+            offspring_size=30,
+            steps_per_design=config.num_vars,
     ):
         super(GA_Task, self).__init__(run_num, barrier, problem, limit, actor_load_path, critic_load_path)
         self.debug = debug
@@ -60,12 +63,12 @@ class GA_Task(AbstractTask):
         self.unique_designs_stiff_ratio = []
 
         # Algorithm parameters
-        self.pop_size = 30
-        self.offspring_size = 30
+        self.pop_size = pop_size
+        self.offspring_size = offspring_size
         self.max_nfe = max_nfe
         self.nfe = 0
         self.limit = limit
-        self.steps_per_design = config.num_vars  # 30 | 60
+        self.steps_per_design = steps_per_design  # 30 | 60
 
         # Population
         self.population = []
@@ -124,11 +127,12 @@ class GA_Task(AbstractTask):
             update_delta = self.nfe - curr_nfe
             progress_bar.update(update_delta)
 
-            if counter % 10 == 0:
-                self.plot_comp()
+            # if counter % 10 == 0:
+            #     self.plot_comp()
 
         # 5. Save population
         self.save_population()
+        # self.plot_comp()
 
         # 6. Save performance if file does not exist
         performance = [[nfe, hv] for hv, nfe in zip(self.hv, self.nfes)]
@@ -190,6 +194,8 @@ class GA_Task(AbstractTask):
             self.population.append(design)
 
     def eval_population(self):
+        self.eval_population_batch()
+
         evals = []
         for design in self.population:
             design_str = design.get_vector_str()
@@ -210,6 +216,28 @@ class GA_Task(AbstractTask):
                 self.unique_designs_in_window.append(deepcopy(design.is_feasible))
                 self.unique_designs_stiff_ratio.append(deepcopy(design.stiffness_ratio))
         return evals
+
+    def eval_population_batch(self):
+        batch_evals = []
+        for design in self.population:
+            design_str = design.get_vector_str()
+            if design.evaluated is False and design_str not in self.unique_designs:
+                self.nfe += 1
+                batch_evals.append(design)
+
+        if len(batch_evals) > 0:
+            # print('evaluating batch designs: ', len(batch_evals))
+            eval_vectors = [design.vector for design in batch_evals]
+            batch_vals = self.problem.evaluate_batch(eval_vectors, self.problem_num, self.run_val)
+            for idx, design in enumerate(batch_evals):
+                vals = design.set_evaluate(batch_vals[idx])
+                design_str = design.get_vector_str()
+                if design_str not in self.unique_designs:
+                    self.unique_designs.add(design_str)
+                    self.unique_designs_lst.append(design_str)
+                    self.unique_designs_vals.append(vals)
+                    self.unique_designs_in_window.append(deepcopy(design.is_feasible))
+                    self.unique_designs_stiff_ratio.append(deepcopy(design.stiffness_ratio))
 
     def prune_population(self):
 
@@ -474,7 +502,10 @@ class GA_Task(AbstractTask):
         plt.title('All Designs')
 
         plt.tight_layout()
-        save_path = os.path.join(self.run_dir, 'ga_comp.png')
+        if self.save_num != -1:
+            save_path = os.path.join(self.run_dir, 'ga_comp_'+str(self.save_num)+'.png')
+        else:
+            save_path = os.path.join(self.run_dir, 'ga_comp.png')
         plt.savefig(save_path)
         plt.close('all')
 
@@ -533,33 +564,37 @@ if __name__ == '__main__':
     problem_num = 0
     run_val = True
 
-    task_runner = GA_Task(
-        run_num=4,
-        problem=problem,
-        limit=100000,
-        c_type='uniform',
-        max_nfe=10000,
-        problem_num=problem_num,
-        run_val=run_val,
-    )
-    task_runner.run()
-    task_runner.plot()
+    # task_runner = GA_Task(
+    #     run_num=11,
+    #     problem=problem,
+    #     limit=100000,
+    #     c_type='uniform',
+    #     max_nfe=10000,
+    #     problem_num=problem_num,
+    #     run_val=run_val,
+    #     pop_size=100,
+    #     offspring_size=100
+    # )
+    # task_runner.run()
+    # task_runner.plot()
 
 
-    # runs = 30
-    # for save_num in range(1, runs):
-    #     task_runner = GA_Task(
-    #         run_num=1100,
-    #         problem=problem,
-    #         limit=100000,
-    #         c_type='uniform',
-    #         max_nfe=10000,
-    #         problem_num=problem_num,
-    #         run_val=run_val,
-    #         save_num=save_num
-    #     )
-    #     performance = task_runner.run()
-    #     # task_runner.plot()
+    runs = 30
+    for save_num in range(3, runs):
+        task_runner = GA_Task(
+            run_num=11,
+            problem=problem,
+            limit=100000,
+            c_type='uniform',
+            max_nfe=10000,
+            problem_num=problem_num,
+            run_val=run_val,
+            save_num=save_num,
+            pop_size=100,
+            offspring_size=100
+        )
+        performance = task_runner.run()
+        # task_runner.plot()
 
 
 

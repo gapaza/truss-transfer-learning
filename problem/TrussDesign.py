@@ -25,6 +25,7 @@ class TrussDesign:
 
         self.is_feasible = True  # always assume true for now
         self.feasibility_score = 0.0  # negative, want to minimize this
+        self.constraint_vals = None
 
         # Alg metrics
         self.crowding_dist = None
@@ -55,24 +56,31 @@ class TrussDesign:
     ### Evaluation ###
     ##################
 
+    def set_evaluate(self, results):
+        h_stiff, v_stiff, stiff_ratio, vol_frac, constraints = results
+        v_stiff = float(v_stiff * -1.0)  # convert to negative value
+        vol_frac = float(vol_frac)
+        stiff_ratio = float(stiff_ratio)
+
+        # Constraints
+        if self.constraints is True:
+            self.evaluate_constraints(constraints, stiff_ratio)
+
+        self.objectives = [v_stiff, vol_frac]
+        self.stiffness_ratio = stiff_ratio
+        self.h_stiffness = h_stiff
+        self.evaluated = True
+        return deepcopy(self.objectives)
+
+
     def evaluate(self):
         if self.evaluated is True:
             return deepcopy(self.objectives)
         else:
+            # print('--> LINEAR EVALUATION')
+            # exit(0)
             h_stiff, v_stiff, stiff_ratio, vol_frac, constraints = self.evaluator.evaluate(self.vector, self.p_num, self.val)
-            v_stiff = float(v_stiff * -1.0)  # convert to negative value
-            vol_frac = float(vol_frac)
-            stiff_ratio = float(stiff_ratio)
-
-            # Constraints
-            if self.constraints is True:
-                self.evaluate_constraints(constraints, stiff_ratio)
-
-            self.objectives = [v_stiff, vol_frac]
-            self.stiffness_ratio = stiff_ratio
-            self.h_stiffness = h_stiff
-            self.evaluated = True
-            return deepcopy(self.objectives)
+            return self.set_evaluate([h_stiff, v_stiff, stiff_ratio, vol_frac, constraints])
 
     def evaluate_constraints(self, constraints, stiff_ratio):
         feasibility_constraint = float(constraints[0])
@@ -84,15 +92,18 @@ class TrussDesign:
         if stiffness_ratio_delta < self.evaluator.feasible_stiffness_delta:
             in_stiffness_window = True
 
+        # print('CONSTRAINTS:', feasibility_constraint, connectivity_constraint, stiffness_ratio_delta)
 
-        # if feasibility_constraint == 1.0 and connectivity_constraint == 1.0 and in_stiffness_window is True:
-        if in_stiffness_window is True:
+
+        if feasibility_constraint == 1.0 and connectivity_constraint == 1.0 and in_stiffness_window is True:
             self.is_feasible = True
         else:
             self.is_feasible = False
 
-        # self.feasibility_score = (feasibility_constraint + connectivity_constraint + (1.0 - stiffness_ratio_delta)) * -1.0  # convert to negative value
-        self.feasibility_score = (1.0 - stiffness_ratio_delta) * -1.0
+        self.constraint_vals = [feasibility_constraint, connectivity_constraint, stiffness_ratio_delta]
+
+        self.feasibility_score = ((feasibility_constraint*10) + connectivity_constraint + (1.0 - stiffness_ratio_delta)) * -1.0  # convert to negative value
+        # self.feasibility_score = stiffness_ratio_delta  # want to minimize, so keep positive
 
 
     #################

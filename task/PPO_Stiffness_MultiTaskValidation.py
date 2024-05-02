@@ -28,8 +28,8 @@ def discounted_cumulative_sums(x, discount):
 num_conditioning_vars = config.num_conditioning_vars
 
 # Save parameters
-run_dir = 4
-run_num = 13
+run_dir = 50
+run_num = 3
 plot_freq = 100
 
 # Problem parameters
@@ -65,6 +65,8 @@ task_epochs = 500
 clip_ratio = 0.2
 target_kl = 0.01
 entropy_coef = 0.02
+
+use_actor_warmup = True
 
 use_actor_train_call = False
 use_critic_train_call = False
@@ -208,13 +210,22 @@ class PPO_Stiffness_MultiTask(AbstractTask):
     def build(self):
 
         # Optimizer parameters
-        self.actor_learning_rate = 0.0001  # 0.0001
+        self.actor_learning_rate = 0.00005  # 0.0001
         self.critic_learning_rate = 0.0001  # 0.0001
         self.train_actor_iterations = 250  # was 250
         self.train_critic_iterations = 40  # was 40
         self.beta_1 = 0.9
         if self.run_val is False:
             self.beta_1 = 0.0
+
+        if use_actor_warmup is True:
+            self.actor_learning_rate = tf.keras.optimizers.schedules.CosineDecay(
+                0.0,  # initial learning rate
+                1000,  # decay_steps
+                alpha=1.0,
+                warmup_target=self.actor_learning_rate,
+                warmup_steps=500
+            )
 
         # Optimizers
         if self.actor_optimizer is None:

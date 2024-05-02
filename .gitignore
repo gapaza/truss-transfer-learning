@@ -17,3 +17,4 @@ analysis/constrained_fibre
 analysis/constrained_truss
 analysis/stiffness_ratio_transfer
 analysis/unconstrained_truss
+analysis/unconstrained_5x5
