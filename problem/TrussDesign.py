@@ -77,7 +77,7 @@ class TrussDesign:
         if self.evaluated is True:
             return deepcopy(self.objectives)
         else:
-            # print('--> LINEAR EVALUATION')
+            print('--> LINEAR EVALUATION')
             # exit(0)
             h_stiff, v_stiff, stiff_ratio, vol_frac, constraints = self.evaluator.evaluate(self.vector, self.p_num, self.val)
             return self.set_evaluate([h_stiff, v_stiff, stiff_ratio, vol_frac, constraints])
@@ -94,15 +94,19 @@ class TrussDesign:
 
         # print('CONSTRAINTS:', feasibility_constraint, connectivity_constraint, stiffness_ratio_delta)
 
-
-        if feasibility_constraint == 1.0 and connectivity_constraint == 1.0 and in_stiffness_window is True:
+        # if feasibility_constraint == 1.0 and connectivity_constraint == 1.0 and in_stiffness_window is True:
+        if connectivity_constraint == 1.0 and in_stiffness_window is True:
             self.is_feasible = True
         else:
             self.is_feasible = False
 
         self.constraint_vals = [feasibility_constraint, connectivity_constraint, stiffness_ratio_delta]
 
-        self.feasibility_score = ((feasibility_constraint*10) + connectivity_constraint + (1.0 - stiffness_ratio_delta)) * -1.0  # convert to negative value
+        feas_coef = 0.0
+        feas_term = feasibility_constraint * feas_coef  # Maximize
+        conn_term = connectivity_constraint             # Maximize
+        stiff_term = 1.0 - stiffness_ratio_delta        # Maximize
+        self.feasibility_score = (feas_term + conn_term + stiff_term) * -1.0  # convert to negative value to minimize
         # self.feasibility_score = stiffness_ratio_delta  # want to minimize, so keep positive
 
 

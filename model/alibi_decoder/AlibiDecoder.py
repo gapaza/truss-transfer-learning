@@ -6,7 +6,11 @@ import keras_nlp
 import math
 
 
-from model.alibi_decoder.AlibiMultiHeadAttention import AlibiMultiHeadAttention
+# from model.alibi_decoder.AlibiMultiHeadAttention import AlibiMultiHeadAttention
+from keras_nlp.src.layers.modeling.cached_multi_head_attention import (
+    CachedMultiHeadAttention,
+)
+
 
 from keras_nlp.src.utils.keras_utils import clone_initializer
 from keras_nlp.src.layers.modeling.transformer_layer_utils import (  # isort:skip
@@ -71,7 +75,16 @@ class AlibiDecoder(keras.layers.Layer):
             )
 
         # Self attention layers.
-        self._self_attention_layer = AlibiMultiHeadAttention(
+        # self._self_attention_layer = AlibiMultiHeadAttention(
+        #     num_heads=self.num_heads,
+        #     key_dim=head_dim,
+        #     dropout=self.dropout,
+        #     kernel_initializer=clone_initializer(self.kernel_initializer),
+        #     bias_initializer=clone_initializer(self.bias_initializer),
+        #     dtype=self.dtype_policy,
+        #     name="self_attention",
+        # )
+        self._self_attention_layer = CachedMultiHeadAttention(
             num_heads=self.num_heads,
             key_dim=head_dim,
             dropout=self.dropout,
@@ -105,7 +118,17 @@ class AlibiDecoder(keras.layers.Layer):
         # Cross attention layers are optional.
         self._cross_attention_layer = None
         if encoder_sequence_shape:
-            self._cross_attention_layer = AlibiMultiHeadAttention(
+            # self._cross_attention_layer = AlibiMultiHeadAttention(
+            #     num_heads=self.num_heads,
+            #     key_dim=head_dim,
+            #     value_dim=head_dim,
+            #     dropout=self.dropout,
+            #     kernel_initializer=clone_initializer(self.kernel_initializer),
+            #     bias_initializer=clone_initializer(self.bias_initializer),
+            #     dtype=self.dtype_policy,
+            #     name="cross_attention",
+            # )
+            self._cross_attention_layer = CachedMultiHeadAttention(
                 num_heads=self.num_heads,
                 key_dim=head_dim,
                 value_dim=head_dim,
@@ -115,6 +138,8 @@ class AlibiDecoder(keras.layers.Layer):
                 dtype=self.dtype_policy,
                 name="cross_attention",
             )
+
+
             if hasattr(self._cross_attention_layer, "_build_from_signature"):
                 self._cross_attention_layer._build_from_signature(
                     query=decoder_sequence_shape,

@@ -62,8 +62,8 @@ class MultiTaskDecoder(tf.keras.Model):
         self.normalize_first = False
         self.decoder_1 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.normalize_first, name='decoder_1', dropout=actor_dropout)
         self.decoder_2 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.normalize_first, name='decoder_2', dropout=actor_dropout)
-        # self.decoder_3 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.normalize_first, name='decoder_3', dropout=actor_dropout)
-        # self.decoder_4 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.normalize_first, name='decoder_4', dropout=actor_dropout)
+        self.decoder_3 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.normalize_first, name='decoder_3', dropout=actor_dropout)
+        self.decoder_4 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.normalize_first, name='decoder_4', dropout=actor_dropout)
         # self.decoder_5 = TransformerDecoder(self.dense_dim, self.num_heads, normalize_first=self.normalize_first, name='decoder_5', dropout=actor_dropout)
 
         # Design Prediction Head
@@ -122,8 +122,8 @@ class MultiTaskDecoder(tf.keras.Model):
         decoded_design = design_sequences_embedded
         decoded_design = self.decoder_1(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
         decoded_design = self.decoder_2(decoded_design, encoder_sequence=constraint_weight, use_causal_mask=True, training=training)
-        # decoded_design = self.decoder_3(decoded_design, encoder_sequence=constraint_weight, use_causal_mask=True, training=training)
-        # decoded_design = self.decoder_4(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
+        decoded_design = self.decoder_3(decoded_design, encoder_sequence=constraint_weight, use_causal_mask=True, training=training)
+        decoded_design = self.decoder_4(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True, training=training)
         # decoded_design = self.decoder_5(decoded_design, encoder_sequence=weight_seq, use_causal_mask=True)
 
 

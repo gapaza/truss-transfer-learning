@@ -164,9 +164,14 @@ class GA_Constrained_Task(AbstractTask):
     def save_population(self):
         bit_strs = []
         for design in self.population:
-            bit_strs.append(design.get_vector_str())
-        bit_strs = list(set(bit_strs))
-        with open(os.path.join(self.run_dir, 'population.json'), 'w') as f:
+            vector_str = design.get_vector_str()
+            if vector_str not in bit_strs:
+                bit_strs.append([vector_str, design.objectives])
+        if self.save_num != -1:
+            file_path = os.path.join(self.run_dir, 'population_'+str(self.save_num)+'.json')
+        else:
+            file_path = os.path.join(self.run_dir, 'population.json')
+        with open(file_path, 'w') as f:
             json.dump(bit_strs, f, indent=4)
 
     def calc_pop_hv(self):
@@ -200,7 +205,7 @@ class GA_Constrained_Task(AbstractTask):
             self.population.append(design)
 
     def eval_population(self):
-        # self.eval_population_batch()
+        self.eval_population_batch()
 
         evals = []
         for design in self.population:
@@ -545,11 +550,11 @@ class GA_Constrained_Task(AbstractTask):
 if __name__ == '__main__':
     # problem = ConstantTruss(n=30)
 
-    target_stiffness_ratio = 1.0  # was 1.0
+    target_stiffness_ratio = 1.7800000000000014  # was 1.0
     feasible_stiffness_delta = 0.01  # was 0.01
 
     problem = Problem(
-        sidenum=3,
+        sidenum=config.sidenum,
         calc_constraints=True,
         target_stiffness_ratio=target_stiffness_ratio,
         feasible_stiffness_delta=feasible_stiffness_delta,
@@ -558,38 +563,37 @@ if __name__ == '__main__':
     problem_num = 0
     run_val = True
 
-    task_runner = GA_Constrained_Task(
-        run_num=10,
-        problem=problem,
-        limit=100000,
-        c_type='uniform',
-        max_nfe=10000,
-        problem_num=problem_num,
-        run_val=run_val,
-        # save_num=0
-        pop_size=100,
-        offspring_size=100
-    )
-    task_runner.run()
-    task_runner.plot()
+    # task_runner = GA_Constrained_Task(
+    #     run_num=3001,
+    #     problem=problem,
+    #     limit=100000,
+    #     c_type='uniform',
+    #     max_nfe=3000,
+    #     problem_num=problem_num,
+    #     run_val=run_val,
+    #     save_num=1,
+    #     pop_size=50,
+    #     offspring_size=50
+    # )
+    # task_runner.run()
+    # task_runner.plot()
 
 
-    # runs = 30
-    # for save_num in range(1, runs):
-    #     task_runner = GA_Constrained_Task(
-    #         run_num=99,
-    #         problem=problem,
-    #         limit=100000,
-    #         c_type='uniform',
-    #         max_nfe=10000,
-    #         problem_num=problem_num,
-    #         run_val=run_val,
-    #         save_num=save_num,
-    #         pop_size=100,
-    #         offspring_size=100
-    #     )
-    #     performance = task_runner.run()
-    #     # task_runner.plot()
+    runs = 30
+    for save_num in range(0, runs):
+        task_runner = GA_Constrained_Task(
+            run_num=6002,
+            problem=problem,
+            limit=100000,
+            c_type='uniform',
+            max_nfe=10000,
+            problem_num=problem_num,
+            run_val=run_val,
+            save_num=save_num,
+            pop_size=50,
+            offspring_size=50
+        )
+        performance = task_runner.run()
 
 
 

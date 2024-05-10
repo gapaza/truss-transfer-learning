@@ -30,7 +30,7 @@ public class EvaluationTruss {
     public boolean debug = false;
     public int eval_count = 0;
 
-    public int num_engines = 1;
+    public int num_engines = 5;
     public MatlabEnginePool enginePool = null;
     public ExecutorService executor = null;
 

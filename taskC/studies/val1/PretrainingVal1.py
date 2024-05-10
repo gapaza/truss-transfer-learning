@@ -4,19 +4,14 @@ import tensorflow as tf
 from copy import deepcopy
 import matplotlib.gridspec as gridspec
 import random
-import json
 import config
 import matplotlib.pyplot as plt
 import os
 from pymoo.indicators.hv import HV
-from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 from task.AbstractTask import AbstractTask
 from problem.TrussDesign import TrussDesign as Design
 import scipy.signal
-from task.GA_Constrained_Task import GA_Constrained_Task
 from modelC import get_multi_task_decoder as get_model
-from collections import OrderedDict
-import tensorflow_addons as tfa
 
 
 def discounted_cumulative_sums(x, discount):
@@ -39,23 +34,21 @@ save_freq = 50
 # Problem parameters
 target_stiffness_ratio = 1.0
 feasible_stiffness_delta = 0.01
-num_tasks = 36 # was 36
+num_tasks = 36  # was 36
 
 # Training Parameters
 task_epochs = 10000
 clip_ratio = 0.2
 target_kl = 0.005
-entropy_coef = 0.15  # was 0.1
+entropy_coef = 0.1  # was 0.1
 
 # Reward weight terms
-reward_coef = 0.1
+reward_coef = 1.0
 perf_term_weight = 1.0
-
-str_multiplier = 5.0  # was 3.0
-fea_multiplier = 10.0  # was 5.0
-constraint_term_weights_epochs = [100]
-constraint_term_weights = [1.0, 1.0]  # was 0.05
-
+str_multiplier = 10.0
+fea_multiplier = 1.0
+constraint_term_weights_epochs = [250]
+constraint_term_weights = [0.01, 0.01]  # was 0.05
 
 use_actor_train_call = False
 use_critic_train_call = False
@@ -106,6 +99,7 @@ class PPO_Constrained_MultiTask(AbstractTask):
         self.unique_designs = [set() for _ in range(self.num_tasks)]
         self.unique_designs_vals = [[] for _ in range(self.num_tasks)]
         self.unique_designs_feasible = [[] for _ in range(self.num_tasks)]
+        self.unique_designs_epochs = [[] for _ in range(self.num_tasks)]
 
         # Algorithm parameters
         self.pop_size = 30  # 32 FU_NSGA2, 10 U_NSGA2
@@ -133,7 +127,7 @@ class PPO_Constrained_MultiTask(AbstractTask):
         self.hv = [[] for _ in range(self.num_tasks)]
 
         # Results
-        self.plot_freq = 50
+        self.plot_freq = plot_freq
         self.performance_returns = []
         self.constraint_returns = []
 
@@ -586,7 +580,7 @@ class PPO_Constrained_MultiTask(AbstractTask):
 
     def calc_reward(self, bitstr, weight, task, run_val=False):
 
-        h_stiffness, v_stiffness, stiff_ratio, vol_frac, constraints = self.problem.evaluate(bitstr, problem_num=task, run_val=run_val)
+        h_stiffness, v_stiffness, stiff_ratio, vol_frac, constraints = self.problem.evaluate(bitstr, problem_num=task, run_val=False)
         h_stiffness = float(h_stiffness)
         v_stiffness = float(v_stiffness)
         stiff_ratio = float(stiff_ratio)
@@ -617,6 +611,7 @@ class PPO_Constrained_MultiTask(AbstractTask):
         # 1. Feasibility Term (minimize)
         feasibility_constraint = float(constraints[0])
         feasibility_term = (1.0 - feasibility_constraint)
+        feasibility_term = 0.0
 
         # 2. Connectivity Term (minimize)
         connectivity_constraint = float(constraints[1])
@@ -631,8 +626,8 @@ class PPO_Constrained_MultiTask(AbstractTask):
         stiffness_ratio_term = 0.0
         if in_stiffness_window is False:
             stiffness_ratio_term = stiffness_ratio_delta
-            if stiffness_ratio_term > 1.0:
-                stiffness_ratio_term = 1.0
+            if stiffness_ratio_term > 3.0:
+                stiffness_ratio_term = 3.0
 
         # -----------------------
         # --- Constraint Term ---
@@ -656,7 +651,8 @@ class PPO_Constrained_MultiTask(AbstractTask):
         # -------------------------------------
 
         is_feasible = False
-        if feasibility_constraint == 1.0 and connectivity_constraint == 1.0 and in_stiffness_window is True:
+        # if feasibility_constraint == 1.0 and connectivity_constraint == 1.0 and in_stiffness_window is True:
+        if connectivity_constraint == 1.0 and in_stiffness_window is True:
             is_feasible = True
             # reward = performance_term * perf_term_weight
         else:
@@ -680,6 +676,7 @@ class PPO_Constrained_MultiTask(AbstractTask):
         if bitstr not in self.unique_designs[task]:
             self.unique_designs[task].add(bitstr)
             self.unique_designs_vals[task].append([v_stiffness, vol_frac])
+            self.unique_designs_epochs[task].append(self.curr_epoch)
             self.unique_designs_feasible[task].append(design.is_feasible)
             self.nfes[task] += 1
         if bitstr not in self.unique_designs_all:
@@ -856,7 +853,7 @@ class PPO_Constrained_MultiTask(AbstractTask):
                     print(f"{key}: {value}", end=' | ')
                 else:
                     print("%s: %.5f" % (key, value), end=' | ')
-            print(sum(self.nfes))
+            print('nfe', sum(self.nfes))
 
 
         # Update metrics
@@ -872,8 +869,34 @@ class PPO_Constrained_MultiTask(AbstractTask):
         if len(self.entropy) % self.plot_freq == 0:
             print('--> PLOTTING')
             self.plot_ppo()
+            self.plot_designs()
         else:
             return
+
+    def plot_designs(self):
+
+        # Plot self.unique_designs_vals
+        all_vals = []
+        all_epochs = []
+        for idx, ud in enumerate(self.unique_designs_vals):
+            all_vals.extend(ud)
+            all_epochs.extend(self.unique_designs_epochs[idx])
+        all_x_vals = [x[0] for x in all_vals]
+        all_y_vals = [x[1] for x in all_vals]
+
+        # --- Plotting ---
+        plt.figure(figsize=(8, 6))
+        plt.scatter(all_x_vals, all_y_vals, c=all_epochs, s=10)
+        plt.xlabel('Vertical Stiffness')
+        plt.ylabel('Volume Fraction')
+        plt.xlim(0, 1.1)
+        plt.ylim(0, 1.1)
+        plt.colorbar()
+        plt.title('Design Space')
+        file_name = os.path.join(self.run_dir, 'design_space_' + str(self.val_itr) + '.png')
+        plt.savefig(file_name)
+        plt.close('all')
+
 
     def plot_ppo(self):
 
@@ -949,7 +972,6 @@ if __name__ == '__main__':
         target_stiffness_ratio=target_stiffness_ratio,
         feasible_stiffness_delta=feasible_stiffness_delta,
     )
-
 
     actor_save_path = None
     critic_save_path = None

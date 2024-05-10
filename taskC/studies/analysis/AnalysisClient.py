@@ -7,97 +7,125 @@ import numpy as np
 import config
 import glob
 import config
+from pandas.plotting import table
 
 from pymoo.indicators.hv import HV
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 
 
-analysis_root = os.path.join(config.root_dir, 'analysis')
+studies_dir = os.path.join(config.root_dir, 'taskC', 'studies')
+analysis_root = os.path.join(studies_dir, 'analysis')
 outdir = os.path.join(analysis_root, 'output')
 
-class HvComparison:
+class AnalysisClient:
 
-    def __init__(self, analysis_dir='constrained_3x3'):
+    def __init__(self, result_dir='constrained_3x3'):
         self.nds = NonDominatedSorting()
         self.ref_point = np.array(config.hv_ref_point)  # science, cost
         self.hv_client = HV(self.ref_point)
 
-        self.analysis_dir = os.path.join(analysis_root, analysis_dir)
+        self.analysis_dir = result_dir
         self.ga_path = os.path.join(self.analysis_dir, 'ga')
-        self.rl_paths = [
-            # os.path.join(config.root_dir, 'model', 'rl', 'ppo', 'runs_mo'),
-            # os.path.join(config.root_dir, 'model', 'rl', 'ppo', 'runs_mo_2b'),
-            # os.path.join(config.root_dir, 'model', 'rl', 'ppo', 'runs_mo_6b'),
-            # os.path.join(config.root_dir, 'model', 'rl', 'ppo', 'runs_mo_12b'),
-            # os.path.join(config.root_dir, 'model', 'rl', 'ppo', 'runs_store', 'mo_20b_2w'),
-            os.path.join(self.analysis_dir, 'ppo_36task'),
-        ]
-        self.rl_path_transfer = os.path.join(self.analysis_dir, 'ppo_36task')
-        self.rl_path = os.path.join(self.analysis_dir, 'ppo')
+        self.ppo_base_path = os.path.join(self.analysis_dir, 'ppo-base')
+        self.ppo_transfer_path = os.path.join(self.analysis_dir, 'ppo-transfer')
+
+        # self.rl_paths = [self.ppo_base_path, self.ppo_transfer_path]
+        # self.rl_path = self.ppo_base_path
+        # self.rl_path_transfer = self.ppo_transfer_path
 
 
-    def run_statistics(self):
-        rl_hv_data = HvComparison.get_hv_data(self.rl_path_transfer)
-        rl_min_nfe, rl_max_nfe = HvComparison.get_nfe_data2(self.rl_path_transfer)
-        print('Pretrain RL HV Mean:', np.mean(rl_hv_data))
-        print('Pretrain RL HV Std:', np.std(rl_hv_data))
-        print('Pretrain RL Avg Max NFE:', np.mean(rl_max_nfe))
-
-        rl2_hv_data = HvComparison.get_hv_data(self.rl_path)
-        rl2_min_nfe, rl2_max_nfe = HvComparison.get_nfe_data2(self.rl_path)
-        print('RL HV Mean:', np.mean(rl2_hv_data))
-        print('RL HV Std:', np.std(rl2_hv_data))
-        print('RL Avg Max NFE:', np.mean(rl2_max_nfe))
+    def load_dir_results(self, dir_path):
+        hv_files = AnalysisClient.get_hv_files(dir_path)
+        all_hvs = []
+        for hv_file in hv_files:
+            with open(hv_file, 'r') as file:
+                data = json.load(file)
+                nfe = [item[0] for item in data]
+                hv = [item[1] for item in data]
+                all_hvs.append(hv)
+        return all_hvs
 
 
-        # print(ga_hv_data)
-        ga_hv_data = HvComparison.get_hv_data(self.ga_path)
-        print('GA HV Mean:', np.mean(ga_hv_data))
-        print('GA HV Std:', np.std(ga_hv_data))
 
+    def run_statistics(self, read_path):
+        data = AnalysisClient.get_hv_data(read_path)
+        print('HV Mean:', np.mean(data))
+        print('HV Std:', np.std(data))
+        mean = round(np.mean(data), 3)
+        std = round(np.std(data), 3)
+        return mean, std
 
 
 
 
-    def run_line_comparison(self, title='Line Comparison', ga_label='NSGA-II'):
-        traces = []
-        traces.extend(HvComparison.get_dataframe_interp(self.ga_path, ga_label, unique_nfe=False))
-        df = pd.concat(traces, ignore_index=True)
-        df[['nfe', 'hv']] = df[['nfe', 'hv']].apply(pd.to_numeric)
-        HvComparison.plot_hv_line_comparison(df, self.rl_paths[0], plot_name='hv_comparison_lines.png', title=title)
+    # def run_line_comparison(self, title='Line Comparison', ga_label='NSGA-II'):
+    #     traces = []
+    #     traces.extend(HvComparison.get_dataframe_interp(self.ga_path, ga_label, unique_nfe=False))
+    #     df = pd.concat(traces, ignore_index=True)
+    #     df[['nfe', 'hv']] = df[['nfe', 'hv']].apply(pd.to_numeric)
+    #     HvComparison.plot_hv_line_comparison(df, self.rl_paths[0], plot_name='hv_comparison_lines.png', title=title)
 
 
 
     def run_ci_comparison(self, title='Confidence Interval Comparison', rl_label='PPO', ga_label='NSGA-II'):
+        if len(os.listdir(self.ppo_transfer_path)) == 0:
+            return
+        if len(os.listdir(self.ga_path)) == 0:
+            return
+
         traces = []
-        for p in self.rl_paths:
-            traces.extend(HvComparison.get_dataframe_interp(p, rl_label, unique_nfe=False))
-        traces.extend(HvComparison.get_dataframe_interp(self.ga_path, ga_label, unique_nfe=False))
+        all_paths = [self.ppo_transfer_path]
+        for p in all_paths:
+            traces.extend(AnalysisClient.get_dataframe_interp(p, rl_label, unique_nfe=False))
+        traces.extend(AnalysisClient.get_dataframe_interp(self.ga_path, ga_label, unique_nfe=False))
 
         # Combine dataframes
         df = pd.concat(traces, ignore_index=True)
         df[['nfe', 'hv']] = df[['nfe', 'hv']].apply(pd.to_numeric)
 
-        HvComparison.plot_hv_comparison(
+        # Get table statistics
+        ppoT_avg, ppoT_std = self.run_statistics(self.ppo_transfer_path)  # Integer values
+        ga_avg, ga_std = self.run_statistics(self.ga_path)  # Integer values
+
+        # Create pandas dataframe for table
+        table_data = {
+            'Algorithm': ['PPO Transfer', 'NSGA-II'],
+            'Mean HV': [ppoT_avg, ga_avg],
+            'Std HV': [ppoT_std, ga_std]
+        }
+        df_table = pd.DataFrame(table_data)
+
+        AnalysisClient.plot_hv_comparison(
             df,
-            plot_name='hv_comparison.png',
-            title=title
+            # plot_name='ga-ppoT.png',
+            title=title,
+            plot_path=os.path.join(self.analysis_dir, 'ga-ppoT.png'),
+            table_data=df_table
         )
 
     def run_3ci_comparison(self, title='Confidence Interval Comparison', rl_label='PPO', ga_label='NSGA-II', rl_label2='PPO2'):
+        if len(os.listdir(self.ppo_transfer_path)) == 0:
+            return
+        if len(os.listdir(self.ga_path)) == 0:
+            return
+        if len(os.listdir(self.ppo_base_path)) == 0:
+            return
+
+
         traces = []
-        traces.extend(HvComparison.get_dataframe_interp(self.rl_path_transfer, rl_label, unique_nfe=False))
-        traces.extend(HvComparison.get_dataframe_interp(self.rl_path, rl_label2, unique_nfe=False))
-        traces.extend(HvComparison.get_dataframe_interp(self.ga_path, ga_label, unique_nfe=False))
+        traces.extend(AnalysisClient.get_dataframe_interp(self.ppo_transfer_path, rl_label, unique_nfe=False))
+        traces.extend(AnalysisClient.get_dataframe_interp(self.ga_path, ga_label, unique_nfe=False))
+        traces.extend(AnalysisClient.get_dataframe_interp(self.ppo_base_path, rl_label2, unique_nfe=False))
 
         # Combine dataframes
         df = pd.concat(traces, ignore_index=True)
         df[['nfe', 'hv']] = df[['nfe', 'hv']].apply(pd.to_numeric)
 
-        HvComparison.plot_hv_comparison(
+        AnalysisClient.plot_hv_comparison(
             df,
-            plot_name='hv_comparison.png',
-            title=title
+            # plot_name='hv_comparison.png',
+            title=title,
+            plot_path=os.path.join(self.analysis_dir, 'ga-ppoT-ppoB.png')
         )
 
     # --------------------------------------
@@ -106,7 +134,7 @@ class HvComparison:
 
     def plot_rl_pareto(self, rl_dir):
         rl_run_name = os.path.basename(rl_dir)
-        gens_files = HvComparison.get_pop_files(rl_dir)
+        gens_files = AnalysisClient.get_pop_files(rl_dir)
         all_designs = []
         all_designs_norm = []
         all_designs_bitstr = []
@@ -158,7 +186,7 @@ class HvComparison:
             json.dump(combined_designs, file, indent=4)
 
     def plot_ga_pareto(self):
-        gens_files = HvComparison.get_gens_files(self.ga_path)
+        gens_files = AnalysisClient.get_gens_files(self.ga_path)
         all_designs = []
         all_designs_norm = []
         all_designs_bitstr = []
@@ -212,28 +240,66 @@ class HvComparison:
     # Static Plotting
     # --------------------------------------
 
+
+
+
+
+
+
     @staticmethod
-    def plot_hv_comparison(data_frames, plot_name='hv_comparison.png', title='Hypervolume Comparison'):
+    def plot_hv_comparison(data_frames, plot_name='hv_comparison.png', title='Hypervolume Comparison', plot_path=None, table_data=None):
         # Plotting
+
+
         plt.clf()
         sns.set(style="darkgrid")
-        plt.figure(figsize=(8, 5))
-        # sns.lineplot(x='nfe', y='hv', hue='label', data=data_frames, ci='sd', estimator='mean')
-        sns.lineplot(x='nfe', y='hv', hue='label', data=data_frames, ci='sd', estimator='mean', linewidth=2.5)
+
+        if table_data is not None:
+            plt.figure(figsize=(8, 7))
+            ax1 = plt.subplot2grid((8, 1), (0, 0), rowspan=6)  # Give more room for the plot
+            sns.lineplot(x='nfe', y='hv', hue='label', data=data_frames, ci='sd', estimator='mean', linewidth=2.5, ax=ax1)
+        else:
+            plt.figure(figsize=(8, 5))
+            sns.lineplot(x='nfe', y='hv', hue='label', data=data_frames, ci='sd', estimator='mean')
+
         plt.title(title, fontsize=20)
         plt.xlabel('NFE', fontsize=16)
         plt.ylabel('Hypervolume', fontsize=16)
         plt.xticks(fontsize=14)  # Larger x-axis tick labels
         plt.yticks(fontsize=14)  # Larger y-axis tick labels
         plt.legend(fontsize=14, loc='lower right')
-        save_path = os.path.join(outdir, plot_name)
+
+        # Plotting the table below the line plot
+        if table_data is not None:
+            ax2 = plt.subplot2grid((8, 1), (6, 0), rowspan=2)  # More space for the table
+            ax2.xaxis.set_visible(False)
+            ax2.yaxis.set_visible(False)
+            ax2.set_facecolor('none')  # Set face color to 'none' for the same color as the rest of the plot
+            table = plt.table(cellText=table_data.values,
+                              colLabels=table_data.columns,
+                              loc='center',
+                              cellLoc='center',
+                              colColours=["palegreen"] * 3)  # You can customize colors
+            table.auto_set_font_size(False)
+            table.set_fontsize(12)
+            table.scale(1, 1.75)  # You can adjust scaling to fit your layout
+            plt.tight_layout()
+
+
+
+
+
+        if plot_path is not None:
+            save_path = plot_path
+        else:
+            save_path = os.path.join(outdir, plot_name)
         plt.savefig(save_path)
 
     @staticmethod
     def plot_hv_line_comparison(data_frames, lines_path, plot_name='hv_comparison_lines.png', title='Line Comparison'):
 
         # Get lines hv files
-        hv_files = HvComparison.get_hv_files(lines_path)
+        hv_files = AnalysisClient.get_hv_files(lines_path)
 
 
         # Plotting
@@ -263,7 +329,7 @@ class HvComparison:
     @staticmethod
     def plot_run_hvs(base_dir, plot_name='hv_runs.png'):
         plt.clf()
-        hv_files = HvComparison.get_hv_files(base_dir)
+        hv_files = AnalysisClient.get_hv_files(base_dir)
         for idx, hv_file in enumerate(hv_files):
             with open(hv_file, 'r') as file:
                 data = json.load(file)
@@ -281,7 +347,7 @@ class HvComparison:
     @staticmethod
     def plot_combined_pop(base_dir, plot_name='run_pops.png'):
         plt.clf()
-        pop_files = HvComparison.get_pop_files(base_dir)
+        pop_files = AnalysisClient.get_pop_files(base_dir)
         all_science = []
         all_cost = []
         for idx, pop_file in enumerate(pop_files):
@@ -319,7 +385,7 @@ class HvComparison:
 
     @staticmethod
     def get_pop_files(base_dir):
-        pattern = os.path.join(base_dir, '**', 'pop*.json')
+        pattern = os.path.join(base_dir, '**', 'population*.json')
         pop_files = glob.glob(pattern, recursive=True)
         return pop_files
 
@@ -327,7 +393,8 @@ class HvComparison:
     def get_nfe_data(base_dir):
         min_nfe = []
         max_nfe = []
-        hv_files = HvComparison.get_hv_files(base_dir)
+        print('base dir:', base_dir)
+        hv_files = AnalysisClient.get_hv_files(base_dir)
         for hv_file in hv_files:
             with open(hv_file, 'r') as file:
                 data = json.load(file)
@@ -344,7 +411,7 @@ class HvComparison:
     def get_nfe_data2(base_dir):
         min_nfe = []
         max_nfe = []
-        hv_files = HvComparison.get_hv_files(base_dir)
+        hv_files = AnalysisClient.get_hv_files(base_dir)
         for hv_file in hv_files:
             with open(hv_file, 'r') as file:
                 data = json.load(file)
@@ -357,7 +424,7 @@ class HvComparison:
     @staticmethod
     def get_hv_data(base_dir):
         max_hv = []
-        hv_files = HvComparison.get_hv_files(base_dir)
+        hv_files = AnalysisClient.get_hv_files(base_dir)
         for hv_file in hv_files:
             with open(hv_file, 'r') as file:
                 data = json.load(file)
@@ -372,12 +439,12 @@ class HvComparison:
     def get_dataframe_interp(base_dir, label, unique_nfe=False):
 
         # Get interpolation data
-        min_nfe, max_nfe, steps = HvComparison.get_nfe_data(base_dir)
+        min_nfe, max_nfe, steps = AnalysisClient.get_nfe_data(base_dir)
 
         print(base_dir, min_nfe, max_nfe, steps)
 
         # Linear interpolation for smooth plotting
-        hv_files = HvComparison.get_hv_files(base_dir)
+        hv_files = AnalysisClient.get_hv_files(base_dir)
         dfs = []
         for hv_file in hv_files:
             if os.path.exists(hv_file):
@@ -404,7 +471,7 @@ class HvComparison:
 
     @staticmethod
     def get_dataframe(base_dir, label):
-        hv_files = HvComparison.get_hv_files(base_dir)
+        hv_files = AnalysisClient.get_hv_files(base_dir)
         dfs = []
         for hv_file in hv_files:
             if os.path.exists(hv_file):
@@ -440,27 +507,37 @@ def rename_files(directory_path):
 
 
 if __name__ == '__main__':
-    # rename_path = os.path.join(config.root_dir, 'results', 'save', 'ga_results')
-    # rename_files(rename_path)
 
-    parse_dir = 'constrained_3x3'
+    study_num = 2    # 1, 2, 3
+    problem_num = 2  # 0, 1, 2
 
+    study = 'val' + str(study_num)
+    problem = 'p' + str(problem_num)
+    parse_dir = os.path.join(studies_dir, study, 'results', problem)
 
-    hv_comparison = HvComparison(parse_dir)
+    client = AnalysisClient(parse_dir)
 
-    rl_label = 'Generative Agent (pretrained)'
+    ppo_transfer_label = 'Generative Agent (pretrained)'
+    ppo_base_label = 'Generative Agent (random init)'
     ga_label = 'NSGA-II'
 
+    ##########################################
+    # Confidence Interval Comparison
+    ##########################################
 
-    ci_title = '3x3 Truss Validation: Generative Agent vs NSGA-II'
-    hv_comparison.run_ci_comparison(title=ci_title, rl_label=rl_label, ga_label=ga_label)
-    # hv_comparison.run_3ci_comparison(title=ci_title, rl_label=rl_label, ga_label=ga_label, rl_label2='Generative Agent (random init)')
+    # GA vs PPO Transfer
+    ci_title = f"Validation {study_num}.{problem_num+1}"
+    client.run_ci_comparison(title=ci_title, rl_label=ppo_transfer_label, ga_label=ga_label)
 
-    line_title = '3x3 Truss Validation: Generative Agent vs NSGA-II'
-    hv_comparison.run_line_comparison(title=line_title, ga_label=ga_label)
+    # GA vs PPO Transfer vs PPO Base
+    ci3_title = f"Validation {study_num}.{problem_num+1}"
+    client.run_3ci_comparison(title=ci_title, rl_label=ppo_transfer_label, ga_label=ga_label, rl_label2=ppo_base_label)
+
+    # line_title = '3x3 Truss Validation: Generative Agent vs NSGA-II'
+    # hv_comparison.run_line_comparison(title=line_title, ga_label=ga_label)
 
 
-    hv_comparison.run_statistics()
+    # hv_comparison.run_statistics()
 
 
 

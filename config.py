@@ -49,9 +49,9 @@ results_save_dir_3 = os.path.join(results_dir, 'RUN3')
 bd_num_weight_vecs = 9
 bd_embed_dim = 16
 
-actor_embed_dim = 32
+actor_embed_dim = 16
 actor_heads = 8
-actor_dense = 512
+actor_dense = 256
 actor_dropout = 0.0
 
 # 3x3 Actor Vals: 16, 16, 256
@@ -65,7 +65,7 @@ critic_heads = 8
 critic_dense = 256
 critic_dropout = 0.0
 
-num_conditioning_vars = 4
+num_conditioning_vars = 2  # 2 for multiple stiffness ratio constraints, 4 for without
 
 fine_tune_actor = False
 fine_tune_critic = False
@@ -78,7 +78,7 @@ fine_tune_critic = False
 # ------------------------------------
 # HV Config
 # ------------------------------------
-hv_ref_point = [0, 1]  # vertical stiffness, volume fraction
+hv_ref_point = [0, 1]  # vertical stiffness, volume fraction  -- was [0, 1]
 
 
 sidenum = 3  # 3 | 4 | 5 | 6

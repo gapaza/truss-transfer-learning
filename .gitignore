@@ -18,3 +18,9 @@ analysis/constrained_truss
 analysis/stiffness_ratio_transfer
 analysis/unconstrained_truss
 analysis/unconstrained_5x5
+/taskC/studies/old/constrained_3x3/pretrained/
+/taskC/studies/val1/pretrained/
+/taskC/studies/val2/pretrained/
+/taskC/studies/val3/pretrained/
+/taskC/studies/val4/pretrained/
+/analysis/constrained_3x3/

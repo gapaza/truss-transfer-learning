@@ -129,4 +129,35 @@ def get_hierarchical_mtd(checkpoint_path_actor=None, checkpoint_path_critic=None
     return actor_model, critic_model, critic_model_2
 
 
+# ---------------------------------------
+# MultiTaskDecoderConstraint
+# ---------------------------------------
+
+from modelC.MultiTaskDecoderConstraint import MultiTaskDecoderConstraint, MultiTaskDecoderConstraintCritic
+
+def get_multi_task_decoder_constraint(checkpoint_path_actor=None, checkpoint_path_critic=None):
+    design_len = config.num_vars
+    conditioning_values = config.num_conditioning_vars
+
+    actor_model = MultiTaskDecoderConstraint()
+    decisions = tf.zeros((1, design_len))
+    weights = tf.zeros((1, conditioning_values))
+    actor_model([decisions, weights])
+
+    critic_model = MultiTaskDecoderConstraintCritic()
+    decisions = tf.zeros((1, design_len + 1))
+    weights = tf.zeros((1, conditioning_values))
+    critic_model([decisions, weights])
+
+    # Load Weights
+    if checkpoint_path_actor:
+        actor_model.load_weights(checkpoint_path_actor).expect_partial()
+    if checkpoint_path_critic:
+        critic_model.load_weights(checkpoint_path_critic).expect_partial()
+
+    return actor_model, critic_model
+
+
+
+
 

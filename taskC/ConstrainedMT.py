@@ -21,9 +21,9 @@ task_samples = 6
 num_repeats = 2
 
 # Run parameters
-run_dir = 10
-run_num = 9
-task_epochs = 1000
+run_dir = 1
+run_num = 10
+task_epochs = 10000
 num_tasks = 36
 
 class ConstrainedMT(AbstractPpoMT):

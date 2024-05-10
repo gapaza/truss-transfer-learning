@@ -31,7 +31,7 @@ repeat_size = 1
 global_mini_batch_size = num_weight_samples * num_task_samples * repeat_size  # 4 * 6 * 2 = 48
 
 # Run parameters
-run_dir = 7
+run_dir = 6
 run_num = 0
 plot_freq = 50
 save_freq = 50
@@ -39,13 +39,13 @@ save_freq = 50
 # Problem parameters
 target_stiffness_ratio = 1.0
 feasible_stiffness_delta = 0.01
-num_tasks = 36 # was 36
+num_tasks = 36
 
 # Training Parameters
 task_epochs = 10000
 clip_ratio = 0.2
 target_kl = 0.005
-entropy_coef = 0.15  # was 0.1
+entropy_coef = 0.1  # was 0.1
 
 # Reward weight terms
 reward_coef = 0.1

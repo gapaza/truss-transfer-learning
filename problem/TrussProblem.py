@@ -13,12 +13,11 @@ from problem.eval.VolFrac import VolFrac
 from multiprocessing import Pool
 
 
-
 def calc_vol_frac(params):
     solution, sidenum, member_radius, side_length = params
     # volume_fraction = TrussFeatures(solution, sidenum, None).calculate_volume_fraction_5x5(member_radius, side_length)
     volume_fraction, num_intersections, features = VolFrac(sidenum, solution).evaluate(member_radius, side_length)
-    return volume_fraction
+    return [volume_fraction, num_intersections]
 
 
 
@@ -32,16 +31,12 @@ class TrussProblem:
         self.sidenum = sidenum
         if self.sidenum == 3:
             self.n = 30
-            self.feasibility_constraint_norm = 94
         elif self.sidenum == 4:
             self.n = 108
-            self.feasibility_constraint_norm = 1304
         elif self.sidenum == 5:
-            self.n = 280  # TODO: get the actual value
-            self.feasibility_constraint_norm = 8942
+            self.n = 280
         elif self.sidenum == 6:
             self.n = 600  # TODO: get the actual value
-            self.feasibility_constraint_norm = 41397
         else:
             raise ValueError('Invalid sidenum:', self.sidenum)
         self.calc_heuristics = calc_heuristics
@@ -67,15 +62,17 @@ class TrussProblem:
         self.youngs_modulus = [1e5, 1.8162e6, 5e6, 20e6, 200e6]
         self.youngs_modulus_norm = utils.normalize_list(self.youngs_modulus)
 
-        # self.val_problems = [
-        #     [0, 250e-6, 10e-3, 1.8162e6],
-        #     [0, 275e-6, 35e-3, 100e6],
-        #     [0, 50e-6, 50e-3, 300e6],
-        #     [1, 250e-6, 10e-3, 1.8162e6],
-        # ]  # 3x3 val problems
         self.val_problems = [
             [0, 250e-6, 10e-3, 1.8162e6],
-        ]  # 5x5 val problems
+            [0, 275e-6, 35e-3, 100e6],
+            [0, 400e-6, 100e-3, 300e6],
+            [1, 250e-6, 10e-3, 1.8162e6],
+            [1, 275e-6, 35e-3, 100e6],
+            [1, 400e-6, 100e-3, 300e6],
+        ]  # 3x3 val problems
+        # self.val_problems = [
+        #     [0, 250e-6, 10e-3, 1.8162e6],
+        # ]  # 5x5 val problems
         self.val_problems_norm = []
         for val_problem in self.val_problems:
             self.val_problems_norm.append([
@@ -134,6 +131,7 @@ class TrussProblem:
         for problem_num in range(len(self.train_problems)):
             # print('Calculating norm values for problem:', problem_num)
             vals = self.calc_norm_values(problem_num=problem_num)
+            print(vals[0], vals[1], vals[2])
             self.h_stiffness_norms_train.append(vals[0])
             self.v_stiffness_norms_train.append(vals[1])
             self.vol_frac_norms_train.append(vals[2])
@@ -242,6 +240,7 @@ class TrussProblem:
                 java_list_designs.append(self.convert_design(sol))
 
         # 2. Evaluate
+        # --> TODO: Change constraints vs heuristics
         objectives = self.my_java_object.evaluateDesignsBatch(
             java_list_designs,
             params[0],  # problem type
@@ -249,8 +248,15 @@ class TrussProblem:
             params[1],  # member radius
             params[2],  # side length
             params[3],  # young's modulus
+
+            # TODO: switch versions
+            # Version 1
             self.calc_constraints,
-            self.calc_heuristics
+            self.calc_heuristics,
+
+            # Version 2
+            # self.calc_heuristics,
+            # self.calc_constraints
         )
         objectives = list(objectives)
         # print('---> BATCH SOURCE:', objectives)
@@ -273,14 +279,15 @@ class TrussProblem:
                 v_stiffness = float(obj[1])
                 stiffness_ratio = float(obj[2])
                 # volume_fraction = float(obj[3])
-                volume_fraction = vol_fracs[idx]
+                volume_fraction = vol_fracs[idx][0]
+                num_intersects = vol_fracs[idx][1]
                 returns = [h_stiffness, v_stiffness, stiffness_ratio, volume_fraction]
                 if self.calc_constraints is True:
-                    returns.append(float(obj[4]))
+                    # returns.append(float(obj[4]))
+                    returns.append(float(num_intersects))
                     returns.append(float(obj[5]))
                 all_returns.append(returns)
         return all_returns
-
 
     # -----------------------------
     # Evaluate
@@ -340,7 +347,7 @@ class TrussProblem:
         if vol >= 1.0:
             v = 0.0
 
-        return h, v, sr, vol, constraints, returns[-1]
+        return h, v, sr, vol, constraints  # , returns[-1]
 
     def _evaluate(self, solution, problem_num=0, run_val=False):
         # problem_num: the train_problem instance to use
@@ -370,6 +377,7 @@ class TrussProblem:
 
         # 2. Evaluate
         # print('Evaluating:', ''.join([str(int(i)) for i in solution]))
+        # --> TODO: Change constraints vs heuristics
         objectives = self.my_java_object.evaluateDesign(
             java_list_design,
             params[0],  # problem type
@@ -377,8 +385,15 @@ class TrussProblem:
             params[1],  # member radius
             params[2],  # side length
             params[3],  # young's modulus
+
+            # TODO: switch versions
+            # Version 1
             self.calc_constraints,
-            self.calc_heuristics
+            self.calc_heuristics,
+
+            # Version 2
+            # self.calc_heuristics,
+            # self.calc_constraints
         )
         objectives = list(objectives)
         # print('---> SINGLE SOURCE:', ''.join([str(x) for x in solution]), objectives)
@@ -387,7 +402,6 @@ class TrussProblem:
         v_stiffness = float(objectives[1])
         stiffness_ratio = float(objectives[2])
         # volume_fraction = float(objectives[3])
-        # volume_fraction = TrussFeatures(solution, self.sidenum, None).calculate_volume_fraction_5x5(params[1], params[2])
         volume_fraction, num_intersections, features = VolFrac(self.sidenum, solution).evaluate(params[1], params[2])
         returns = [h_stiffness, v_stiffness, stiffness_ratio, volume_fraction]
         if self.calc_constraints is True:
@@ -485,6 +499,11 @@ class TrussProblem:
         return vals
 
 
+
+####################################################################################################
+# TESTING
+####################################################################################################
+
 import time
 if __name__ == '__main__':
     truss = TrussProblem(
@@ -495,10 +514,10 @@ if __name__ == '__main__':
     )
 
 
-    design = [1 for x in range(truss.n)]
-    # design = '101000001110000010010100111001'
-    results = truss.evaluate(design, problem_num=0, run_val=True)
-    print('Results:', results)  # 3x3 94 max overlaps, 4x4 ~ 1304 max overlaps, 5x5 ~ 8942 max overlaps, 6x6 ~ 41397 max overlaps
+    # design = [1 for x in range(truss.n)]
+    # # design = '101000001110000010010100111001'
+    # results = truss.evaluate(design, problem_num=0, run_val=True)
+    # print('Results:', results)  # 3x3 94 max overlaps, 4x4 ~ 1304 max overlaps, 5x5 ~ 8942 max overlaps, 6x6 ~ 41397 max overlaps
 
 
 
@@ -511,27 +530,28 @@ if __name__ == '__main__':
 
 
 
-    # designs = truss.sample_random_designs(100)
-    # curr_time = time.time()
-    # results = truss.evaluate_batch(designs, problem_num=0, run_val=True)
-    # print('BATCH Time:', time.time() - curr_time)
-    #
-    #
-    # curr_time = time.time()
-    # single_results = []
-    # for design in designs:
-    #     h, v, sr, vol, constraints = truss.evaluate(design, problem_num=0, run_val=True)
-    #     single_results.append([h, v, sr, vol, constraints])
-    # print('SINGLE Time:', time.time() - curr_time)
-    #
-    # # Validate results are the same between batch and single
-    # for i in range(len(results)):
-    #     if results[i] != single_results[i]:
-    #         print('Results are different')
-    #         print('Batch:', results[i])
-    #         print('Single:', single_results[i])
-    #         exit(0)
-    # print('SUCCESS')
+    designs = truss.sample_random_designs(100)
+    curr_time = time.time()
+    results = truss.evaluate_batch(designs, problem_num=0, run_val=True)
+    print('BATCH Time:', time.time() - curr_time)
+
+    curr_time = time.time()
+    single_results = []
+    for design in designs:
+        h, v, sr, vol, constraints = truss.evaluate(design, problem_num=0, run_val=True)
+        single_results.append([h, v, sr, vol, constraints])
+    print('SINGLE Time:', time.time() - curr_time)
+
+    # Validate results are the same between batch and single
+    for i in range(len(results)):
+        if results[i] != single_results[i]:
+            print('Results are different')
+            print('Batch:', results[i])
+            print('Single:', single_results[i])
+            exit(0)
+    print('SUCCESS')
+
+
 
 
 

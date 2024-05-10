@@ -32,15 +32,15 @@ feasible_stiffness_delta = 0.01
 # Run parameters
 save_init_weights = False
 load_init_weights = False
-run_dir = 10
-run_num = 6
+run_dir = 7
+run_num = 10
 plot_freq = 25
 
 
 # Sampling parameters
-num_weight_samples = 4  # 4
+num_weight_samples = 9  # 4
 num_task_samples = 1  # 1
-repeat_size = 3  # 3
+repeat_size = 4  # 3
 global_mini_batch_size = num_weight_samples * num_task_samples * repeat_size
 
 uniform_sampling = True
@@ -72,7 +72,7 @@ perf_term_weight = 1.0
 constraint_term_weight = 1.0  # was 0.2
 
 str_multiplier = 1.0
-fea_multiplier = 1.0
+fea_multiplier = 5.0
 
 use_actor_train_call = False
 use_critic_train_call = False
@@ -1221,8 +1221,8 @@ if __name__ == '__main__':
     # actor_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'actor_weights')
     # critic_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'critic_weights')
 
-    actor_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'actor_weights_500')
-    critic_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'critic_weights_500')
+    actor_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'actor_weights_2550')  # 600 worked best
+    critic_save_path = os.path.join(config.results_save_dir, 'run_' + str(run_dir), 'pretrained', 'critic_weights_2550')  # 600 worked best
 
     # actor_save_path = None
     # critic_save_path = None
