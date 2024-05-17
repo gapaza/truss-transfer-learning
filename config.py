@@ -49,23 +49,24 @@ results_save_dir_3 = os.path.join(results_dir, 'RUN3')
 bd_num_weight_vecs = 9
 bd_embed_dim = 16
 
-actor_embed_dim = 16
-actor_heads = 8
-actor_dense = 256
-actor_dropout = 0.0
 
-# 3x3 Actor Vals: 16, 16, 256
 
-# Previous Actor Vals: 64, 32, 1024 (run_3, best so far)
-# Actor Vals: 32, 16, 512 (run_4, not great)
-# Actor Vals: 128, 32, 1024 (run_5)
+model_embed_dim = 32
+model_heads = 32
+model_dense = 512
+model_dropout = 0.0
 
-critic_embed_dim = 16
-critic_heads = 8
-critic_dense = 256
-critic_dropout = 0.0
+actor_embed_dim = model_embed_dim
+actor_heads = model_heads
+actor_dense = model_dense
+actor_dropout = model_dropout
 
-num_conditioning_vars = 2  # 2 for multiple stiffness ratio constraints, 4 for without
+critic_embed_dim = model_embed_dim
+critic_heads = model_heads
+critic_dense = model_dense
+critic_dropout = model_dropout
+
+num_conditioning_vars = 1
 
 fine_tune_actor = False
 fine_tune_critic = False
@@ -79,7 +80,9 @@ fine_tune_critic = False
 # HV Config
 # ------------------------------------
 hv_ref_point = [0, 1]  # vertical stiffness, volume fraction  -- was [0, 1]
-
+hv_ref_point_mo = [0, 0, 1]
+hv_ref_point_mo4 = [0, 0, 0, 1]
+hv_ref_point_mo6 = [0, 0, 0, 0, 0, 1]
 
 sidenum = 3  # 3 | 4 | 5 | 6
 
@@ -94,6 +97,9 @@ elif sidenum == 6:
     num_vars = 600
 else:
     raise ValueError('Invalid sidenum')
+
+# sidenum = 4
+# num_vars = 60
 
 # num_vars_nr (non-repeatable)
 num_vars_nr = 36

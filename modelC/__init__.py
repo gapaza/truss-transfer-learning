@@ -33,7 +33,34 @@ def get_multi_task_decoder(checkpoint_path_actor=None, checkpoint_path_critic=No
 
     return actor_model, critic_model
 
+def get_multi_task_decoder_curious(checkpoint_path_actor=None, checkpoint_path_critic=None):
+    design_len = config.num_vars
+    conditioning_values = config.num_conditioning_vars
 
+    actor_model = MultiTaskDecoder()
+    decisions = tf.zeros((1, design_len))
+    weights = tf.zeros((1, conditioning_values))
+    actor_model([decisions, weights])
+
+
+
+    critic_model = MultiTaskDecoderCritic()
+    c_decisions = tf.zeros((1, design_len + 1))
+    c_weights = tf.zeros((1, conditioning_values))
+    critic_model([c_decisions, c_weights])
+
+
+    # Load Weights
+    if checkpoint_path_actor:
+        actor_model.load_weights(checkpoint_path_actor).expect_partial()
+    if checkpoint_path_critic:
+        critic_model.load_weights(checkpoint_path_critic).expect_partial()
+
+    curiosity_model = MultiTaskDecoder()
+    curiosity_model([decisions, weights])
+    curiosity_model.set_weights(actor_model.get_weights())
+
+    return actor_model, critic_model, curiosity_model
 
 
 # ---------------------------------------
@@ -157,6 +184,31 @@ def get_multi_task_decoder_constraint(checkpoint_path_actor=None, checkpoint_pat
 
     return actor_model, critic_model
 
+
+
+# ---------------------------------------
+# QDecoder
+# ---------------------------------------
+
+from modelC.QDecoder import QDecoder
+
+def get_q_decoder(checkpoint_path=None):
+    design_len = config.num_vars
+    conditioning_values = config.num_conditioning_vars
+
+    q_network = QDecoder()
+    decisions = tf.zeros((1, design_len))
+    weights = tf.zeros((1, conditioning_values))
+    q_network([decisions, weights])
+
+    q_target_network = QDecoder()
+    q_target_network([decisions, weights])
+
+    if checkpoint_path:
+        q_network.load_weights(checkpoint_path).expect_partial()
+        q_target_network.load_weights(checkpoint_path).expect_partial()
+
+    return q_network, q_target_network
 
 
 
