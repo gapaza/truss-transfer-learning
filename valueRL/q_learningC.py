@@ -10,9 +10,9 @@ import matplotlib.pyplot as plt
 import os
 from pymoo.indicators.hv import HV
 from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
-from problem.knapsack.KnapsackDesign import KnapsackDesign as Design
+from problem.knapsack.KnapsackDesignC import KnapsackDesignC as Design
 import scipy.signal
-from task.GA_Knapsack_Task import GA_Knapsack_Task
+from task.GA_Knapsack_TaskC import GA_Knapsack_TaskC
 from modelC import get_q_decoder as get_model
 
 # Set random seed
@@ -23,8 +23,8 @@ tf.random.set_seed(seed_num)
 # Run parameters
 save_init_weights = False
 load_init_weights = False
-run_dir = 11
-run_num = 2  # ------------------------- RUN NUM
+run_dir = 16
+run_num = 0  # ------------------------- RUN NUM
 plot_freq = 50
 task_epochs = 10000
 
@@ -37,9 +37,9 @@ global_mini_batch_size = num_weight_samples * repeat_size
 # Target Network Update
 value_learning_rate = 0.001
 use_warmup = False
-update_batch_size_max = 256
+update_batch_size_max = 32
 update_batch_size_min = 32
-update_batch_iterations = 200
+update_batch_iterations = 20
 update_target_network_freq = 5
 
 # Replay Buffer
@@ -52,6 +52,7 @@ decay_steps = 50 * config.num_vars
 
 # Reward
 perf_term_weight = 1.0
+constraint_term_weight = 0.1
 
 
 class QLearning:
@@ -138,6 +139,7 @@ class QLearning:
         self.run_tasks = [val_task]  # Validation tasks
 
         # GA Comparison Data
+        self.ga_objs = []
         self.uniform_ga = self.init_comparison_data()
 
         self.additional_info = {
@@ -149,18 +151,33 @@ class QLearning:
 
     def init_comparison_data(self):
         print('--> RUNNING GA')
-        task_runner = GA_Knapsack_Task(
+        task_runner = GA_Knapsack_TaskC(
             run_num=self.run_num,
             problem=self.problem,
             limit=100000,
             c_type='uniform',
-            max_nfe=10000,
+            max_nfe=100000,
             problem_num=self.val_task,
             run_val=True,
-            pop_size=50,
-            offspring_size=50,
+            pop_size=100,
+            offspring_size=100,
         )
         performance = task_runner.run()
+
+        # Open ga population file
+        ga_filename = 'population.json'
+        ga_pop_path = os.path.join(self.run_dir, ga_filename)
+        with open(ga_pop_path, 'r') as f:
+            ga_pop = json.load(f)
+        ga_objs = []
+        for ga_design in ga_pop:
+            objs = ga_design[1]
+            objs[0] = objs[0] * -1.0
+            ga_objs.append(objs)
+        self.ga_objs = ga_objs
+
+
+
         return performance
 
     def build(self):
@@ -187,7 +204,7 @@ class QLearning:
 
         for x in range(self.epochs):
             self.curr_epoch = x
-            avg_reward = self.gen_trajectories()
+            avg_reward, avg_constraint = self.gen_trajectories()
             self.prune_population()
             epoch_info = None
             # epoch_info = self.train_q_network(use_pop=True)
@@ -195,6 +212,7 @@ class QLearning:
                 epoch_info = self.update_q_network(use_pop=False)
             if epoch_info:
                 epoch_info['avg_reward'] = avg_reward
+                epoch_info['avg_constraint'] = avg_constraint
             self.record(epoch_info)
 
             if self.curr_epoch % update_target_network_freq == 0:
@@ -438,15 +456,17 @@ class QLearning:
         all_her_weights = []
         children = []
         all_rewards_flat = []
+        all_constraints = []
         for idx, design in enumerate(designs):
             design_bitstr = ''.join([str(x) for x in design])
             epoch_designs.append(design_bitstr)
-            reward, design_obj, her_rewards, her_weights = self.calc_reward(design_bitstr, weight_samples_all[idx])
+            reward, design_obj, her_rewards, her_weights, constraint = self.calc_reward(design_bitstr, weight_samples_all[idx])
             children.append(design_obj)
             all_rewards[idx][-1] = reward
             all_her_rewards.append(her_rewards)
             all_her_weights.append(her_weights)
             all_rewards_flat.append(reward)
+            all_constraints.append(constraint)
 
         # -------------------------------------
         # Save to replay buffer
@@ -497,7 +517,7 @@ class QLearning:
 
         self.population += children
 
-        return np.mean(all_rewards_flat)
+        return np.mean(all_rewards_flat), np.mean(all_constraints)
 
     def sample_value_network(self, observation, cross_obs_tensor):
         inf_idx = len(observation[0]) - 1
@@ -624,7 +644,7 @@ class QLearning:
     # -------------------------------------
 
     def calc_reward(self, bitstr, weight):
-        obj_value, obj_weight = self.problem.evaluate(bitstr)
+        obj_value, obj_weight, constraint = self.problem.evaluate(bitstr)
 
         # -------------------------------------
         # Calculate performance reward
@@ -637,7 +657,17 @@ class QLearning:
         performance_term = value_term + weight_term
         performance_term = performance_term * perf_term_weight
 
-        reward = performance_term
+
+        # -------------------------------------
+        # Calculate constraint rewards
+        # -------------------------------------
+
+        constraint_term = (constraint * -1.0) * constraint_term_weight
+
+
+        reward = performance_term + constraint_term
+
+
 
         # Her Rewards
         her_rewards = []
@@ -647,6 +677,8 @@ class QLearning:
             her_rewards.append(her_reward)
             her_weights.append([w])
 
+
+
         # -------------------------------------
         # Create design
         # -------------------------------------
@@ -655,6 +687,7 @@ class QLearning:
             c_type=self.c_type, p_num=0, val=True, constraints=True
         )
         design.set_objectives(obj_value * -1.0, obj_weight)
+        design.evaluate_constraints(constraint)
         design.evaluated = True
         if bitstr not in self.unique_designs:
             self.unique_designs.add(bitstr)
@@ -662,7 +695,7 @@ class QLearning:
             self.unique_designs_feasible.append(design.is_feasible)
             self.unique_designs_epoch.append(self.curr_epoch)
             self.nfe += 1
-        return reward, design, her_rewards, her_weights
+        return reward, design, her_rewards, her_weights, constraint
 
     def calc_her_reward(self, obj_value, obj_weight, weight):
         w1 = weight
@@ -760,26 +793,37 @@ class QLearning:
         plt.scatter(infeasible_x, infeasible_y, color='grey', alpha=0.3)
         plt.xlim(0, 1.1)
         plt.ylim(0, 1.1)
-        plt.xlabel('Vertical Stiffness')
-        plt.ylabel('Volume Fraction')
+        plt.xlabel('Value')
+        plt.ylabel('Weight')
         plt.title('All Designs')
 
-        # Design plot epoch
+        # # Design plot epoch
+        # plt.subplot(gs[1, 2])
+        # x_vals = []
+        # y_vals = []
+        # colors = []
+        # for idx, obj_vals in enumerate(self.unique_designs_vals):
+        #     x_vals.append(obj_vals[0] * -1.0)
+        #     y_vals.append(obj_vals[1])
+        #     colors.append(self.unique_designs_epoch[idx])
+        # scatter = plt.scatter(x_vals, y_vals, c=colors, cmap='viridis')
+        # plt.colorbar(scatter, label='Epoch')
+        # plt.xlim(0, 1.1)
+        # plt.ylim(0, 1.1)
+        # plt.xlabel('Vertical Stiffness')
+        # plt.ylabel('Volume Fraction')
+        # plt.title('All Designs')
+
+        # GA Design Plot
         plt.subplot(gs[1, 2])
-        x_vals = []
-        y_vals = []
-        colors = []
-        for idx, obj_vals in enumerate(self.unique_designs_vals):
-            x_vals.append(obj_vals[0] * -1.0)
-            y_vals.append(obj_vals[1])
-            colors.append(self.unique_designs_epoch[idx])
-        scatter = plt.scatter(x_vals, y_vals, c=colors, cmap='viridis')
-        plt.colorbar(scatter, label='Epoch')
+        scatter = plt.scatter([r[0] for r in self.ga_objs], [r[1] for r in self.ga_objs], color='red', label='GA Designs')
         plt.xlim(0, 1.1)
         plt.ylim(0, 1.1)
-        plt.xlabel('Vertical Stiffness')
-        plt.ylabel('Volume Fraction')
-        plt.title('All Designs')
+        plt.xlabel('Value')
+        plt.ylabel('Weight')
+        plt.title('GA Designs')
+
+
 
 
 
@@ -798,10 +842,10 @@ class QLearning:
 # ----------------------------------------------------------------------------------------------------------------------
 
 
-from problem.knapsack.TwoObjectiveSimpleKP import TwoObjectiveSimpleKP
+from problem.knapsack.TwoObjectiveSimpleKPC import TwoObjectiveSimpleKPC
 
 if __name__ == '__main__':
-    problem = TwoObjectiveSimpleKP(
+    problem = TwoObjectiveSimpleKPC(
         n=config.num_vars,
         new_problem=False
     )

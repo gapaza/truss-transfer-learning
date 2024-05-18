@@ -33,8 +33,14 @@ class AbstractKnapsack:
     # Common Methods
     # --------------------------------
 
-    def random_solution(self):
-        return ''.join([str(random.choice([0, 0, 1])) for _ in range(self.n)])
+    def random_design(self):
+        bit_array = np.zeros(self.n, dtype=int)
+        num_bits_to_flip = np.random.randint(1, self.n)
+        indices_to_flip = np.random.choice(self.n, num_bits_to_flip, replace=False)
+        for index in indices_to_flip:
+            bit_array[index] = 1
+        return list(bit_array)
+
 
     def save(self):
         with open(self.path, 'wb') as f:
