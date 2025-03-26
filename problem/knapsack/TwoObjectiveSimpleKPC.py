@@ -35,6 +35,7 @@ class TwoObjectiveSimpleKPC(AbstractKnapsack):
         problem = {
             'values': [],
             'weights': [],
+            'inv_values': [],
             'value_norm': 1,
             'weight_norm': 1,
             'max_weight': 0,
@@ -49,10 +50,16 @@ class TwoObjectiveSimpleKPC(AbstractKnapsack):
             if random.random() <= prob_value:
                 item_value = random.uniform(self.val_range[0], self.val_range[1])
 
+            # Assign Inv Value
+            item_inv_value = 0
+            if random.random() <= prob_value:
+                item_inv_value = random.uniform(self.val_range[0], self.val_range[1])
+
             # Assign Weight
             item_weight = random.uniform(self.weight_range[0], self.weight_range[1])
             problem['values'].append(item_value)
             problem['weights'].append(item_weight)
+            problem['inv_values'].append(item_inv_value)
 
         # Set max weight
         problem['max_weight'] = np.sum(problem['weights']) / 2.0
@@ -66,7 +73,7 @@ class TwoObjectiveSimpleKPC(AbstractKnapsack):
 
     def find_norms(self, problem):
         random_designs = [
-            self.random_design() for _ in range(10000)
+            self.random_design() for _ in range(1000000)
         ]
 
         weights, values = [], []
@@ -76,7 +83,8 @@ class TwoObjectiveSimpleKPC(AbstractKnapsack):
                 weights.append(weight)
                 values.append(value)
 
-        problem['value_norm'] = np.max(values) * 1.2  # Add margin
+        print('Found', len(weights), 'feasible designs')
+        problem['value_norm'] = np.max(values) * 1.4  # Add margin
         problem['weight_norm'] = np.max(weights) * 1.1  # Add margin
         return problem
 
@@ -111,12 +119,18 @@ class TwoObjectiveSimpleKPC(AbstractKnapsack):
             if solution[i] == 1:
                 weight += items['weights'][i]
 
+        # 3. Calculate inv value
+        inv_value = 0
+        for i in range(self.n):
+            if solution[i] == 1:
+                inv_value += items['inv_values'][i]
+
         # 3. Calculate constraint
         constraint_val = 0
         # if weight > items['max_weight']:
         #     constraint_val = abs(weight - items['max_weight'])
-        if weight > 0:
-            ratio = value / weight
+        if inv_value > 0 and weight > 0:
+            ratio = value / inv_value
             ratio_delta = abs(ratio - items['ratio'])
             if ratio_delta > ratio_threshold:
                 constraint_val = ratio_delta
@@ -147,7 +161,9 @@ if __name__ == '__main__':
     # sol = ''.join([str(1) for _ in range(n)])
 
     feasible_found = False
+    counter = 0
     while not feasible_found:
+        counter += 1
         sol = kp.random_design()
         value, weight, constraint = kp.evaluate(sol)
         if constraint == 0:
@@ -157,6 +173,7 @@ if __name__ == '__main__':
     print('Value:', value)
     print('Weight:', weight)
     print('Constraint:', constraint)
+    print('Counter:', counter)
 
     kp.save()
 

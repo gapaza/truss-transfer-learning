@@ -14,17 +14,18 @@ from problem.knapsack.KnapsackDesignC import KnapsackDesignC as Design
 import scipy.signal
 from task.GA_Knapsack_TaskC import GA_Knapsack_TaskC
 from modelC import get_q_decoder as get_model
+import tensorflow_addons as tfa
 
 # Set random seed
-seed_num = 0
+seed_num = 1
 random.seed(seed_num)
 tf.random.set_seed(seed_num)
 
 # Run parameters
 save_init_weights = False
 load_init_weights = False
-run_dir = 16
-run_num = 0  # ------------------------- RUN NUM
+run_dir = 15
+run_num = 6  # ------------------------- RUN NUM
 plot_freq = 50
 task_epochs = 10000
 
@@ -39,8 +40,8 @@ value_learning_rate = 0.001
 use_warmup = False
 update_batch_size_max = 32
 update_batch_size_min = 32
-update_batch_iterations = 20
-update_target_network_freq = 5
+update_batch_iterations = 1
+update_target_network_freq = 1
 
 # Replay Buffer
 replay_buffer_size = 10000
@@ -48,7 +49,7 @@ replay_buffer_size = 10000
 # Epsilon Greedy
 epsilon = 0.99  # was 0.99
 epsilon_end = 0.01
-decay_steps = 50 * config.num_vars
+decay_steps = 1 * config.num_vars
 
 # Reward
 perf_term_weight = 1.0
@@ -91,7 +92,7 @@ class QLearning:
         self.q_network_save_path = os.path.join(self.run_dir, 'q_network_weights')
 
         # HV
-        self.pop_size = 100
+        self.pop_size = 256
         self.ref_point = np.array(config.hv_ref_point)  # value, weight
         self.hv_client = HV(self.ref_point)
         self.nds = NonDominatedSorting()
@@ -156,7 +157,7 @@ class QLearning:
             problem=self.problem,
             limit=100000,
             c_type='uniform',
-            max_nfe=100000,
+            max_nfe=10000,
             problem_num=self.val_task,
             run_val=True,
             pop_size=100,
@@ -190,7 +191,9 @@ class QLearning:
                 warmup_target=self.value_learning_rate,
                 warmup_steps=1000
             )
-        self.value_optimizer = tf.keras.optimizers.Adam(learning_rate=self.value_learning_rate)
+        # self.value_optimizer = tf.keras.optimizers.Adam(learning_rate=self.value_learning_rate)
+        # rectified adam
+        self.value_optimizer = tfa.optimizers.RectifiedAdam(learning_rate=self.value_learning_rate)
 
         # Q Network
         self.value_network, self.target_value_network = get_model(self.q_network_load_path)
@@ -207,7 +210,7 @@ class QLearning:
             avg_reward, avg_constraint = self.gen_trajectories()
             self.prune_population()
             epoch_info = None
-            # epoch_info = self.train_q_network(use_pop=True)
+            # epoch_info = self.update_q_network(use_pop=True)
             for x in range(update_batch_iterations):
                 epoch_info = self.update_q_network(use_pop=False)
             if epoch_info:
@@ -457,10 +460,12 @@ class QLearning:
         children = []
         all_rewards_flat = []
         all_constraints = []
+        all_new_designs = []
         for idx, design in enumerate(designs):
             design_bitstr = ''.join([str(x) for x in design])
             epoch_designs.append(design_bitstr)
-            reward, design_obj, her_rewards, her_weights, constraint = self.calc_reward(design_bitstr, weight_samples_all[idx])
+            reward, design_obj, her_rewards, her_weights, constraint, new_design = self.calc_reward(design_bitstr, weight_samples_all[idx])
+            all_new_designs.append(new_design)
             children.append(design_obj)
             all_rewards[idx][-1] = reward
             all_her_rewards.append(her_rewards)
@@ -483,29 +488,31 @@ class QLearning:
                 'bitstr': epoch_designs[idx],
                 'epoch': self.curr_epoch,
             }
-            memories.append(buffer_entry)
             children[idx].memory = deepcopy(buffer_entry)
-
-        her_memories = []  # Hindsight Experience Replay
-        for idx, memory in enumerate(memories):
-            # Recalculate reward for different weight samples
-            # Update cross_obs_tensor to reflect new weight sample
-            for her_reward, her_weight in zip(all_her_rewards[idx], all_her_weights[idx]):
-                mem_copy = deepcopy(memory)
-                mem_copy['rewards'][-1] = her_reward
-                buffer_entry = {
-                    'observation': mem_copy['observation'],
-                    'cross_obs': tf.convert_to_tensor(her_weight, dtype=tf.float32),
-                    'actions': mem_copy['actions'],
-                    'rewards': mem_copy['rewards'],
-                    'bitstr': mem_copy['bitstr'],
-                    'epoch': mem_copy['epoch'],
-                }
-                her_memories.append(buffer_entry)
+            if all_new_designs[idx] is True:
+                memories.append(buffer_entry)
 
 
         self.replay_buffer.extend(memories)
+
+        # her_memories = []  # Hindsight Experience Replay
+        # for idx, memory in enumerate(memories):
+        #     # Recalculate reward for different weight samples
+        #     # Update cross_obs_tensor to reflect new weight sample
+        #     for her_reward, her_weight in zip(all_her_rewards[idx], all_her_weights[idx]):
+        #         mem_copy = deepcopy(memory)
+        #         mem_copy['rewards'][-1] = her_reward
+        #         buffer_entry = {
+        #             'observation': mem_copy['observation'],
+        #             'cross_obs': tf.convert_to_tensor(her_weight, dtype=tf.float32),
+        #             'actions': mem_copy['actions'],
+        #             'rewards': mem_copy['rewards'],
+        #             'bitstr': mem_copy['bitstr'],
+        #             'epoch': mem_copy['epoch'],
+        #         }
+        #         her_memories.append(buffer_entry)
         # self.replay_buffer.extend(her_memories)
+
 
         if len(self.replay_buffer) > self.replay_buffer_size:
             self.replay_buffer = sorted(self.replay_buffer, key=lambda x: x['epoch'], reverse=True)
@@ -562,20 +569,18 @@ class QLearning:
         # -------------------------------------
 
         # Determine if using pop
+        # update_batch = self.sample_buffer_priority()
         if use_pop is True:
-            pop_memories = [design.memory for design in self.population]
-            update_batch_size = min(update_batch_size_max, len(pop_memories))
-            update_batch = random.sample(pop_memories, update_batch_size)
+            update_batch = self.sample_pop()
         else:
-            update_batch_size = min(update_batch_size_max, len(self.replay_buffer))
-            self.replay_buffer = sorted(self.replay_buffer, key=lambda x: x['epoch'], reverse=True)
-            update_batch = random.sample(self.replay_buffer, update_batch_size)
+            update_batch = self.sample_buffer()
 
 
         observation_batch = [x['observation'] for x in update_batch]
         cross_obs_batch = [x['cross_obs'] for x in update_batch]
         actions_batch = [x['actions'] for x in update_batch]
         rewards_batch = [x['rewards'] for x in update_batch]
+        # weights_batch = [x['importance_weight'] for x in update_batch]
 
         observation_tensor = tf.convert_to_tensor(observation_batch, dtype=tf.float32)
         cross_obs_tensor = tf.convert_to_tensor(cross_obs_batch, dtype=tf.float32)
@@ -612,23 +617,111 @@ class QLearning:
         }
         return epoch_info
 
+    def sample_pop(self):
+        pop_memories = [design.memory for design in self.population]
+        update_batch_size = min(update_batch_size_max, len(pop_memories))
+        update_batch = random.sample(pop_memories, update_batch_size)
+        return update_batch
+
+    def sample_buffer(self):
+        update_batch_size = min(update_batch_size_max, len(self.replay_buffer))
+        self.replay_buffer = sorted(self.replay_buffer, key=lambda x: x['epoch'], reverse=True)
+        update_batch = random.sample(self.replay_buffer, update_batch_size)
+        return update_batch
+
+    def sample_buffer_priority(self):
+
+        # 1. Get memories
+        observation_batch = [x['observation'] for x in self.replay_buffer]
+        cross_obs_batch = [x['cross_obs'] for x in self.replay_buffer]
+        actions_batch = [x['actions'] for x in self.replay_buffer]
+        rewards_batch = [x['rewards'] for x in self.replay_buffer]
+
+        observation_tensor = tf.convert_to_tensor(observation_batch, dtype=tf.float32)
+        cross_obs_tensor = tf.convert_to_tensor(cross_obs_batch, dtype=tf.float32)
+        actions_tensor = tf.convert_to_tensor(actions_batch, dtype=tf.int32)
+
+        # 2. Calculate Q Targets
+        q_targets = self.sample_target_network(observation_tensor, cross_obs_tensor)
+        q_targets = q_targets.numpy()
+
+        target_values = []
+        for idx in range(len(self.replay_buffer)):
+            rewards = np.array(rewards_batch[idx])
+            targets = np.array(q_targets[idx])
+            target_vals = rewards[:-1] + self.gamma * targets[1:]
+            target_vals = target_vals.tolist()
+            target_vals.append(rewards[-1])
+            target_values.append(target_vals)
+        target_values = tf.convert_to_tensor(target_values, dtype=tf.float32)
+
+        # 3. Calculate losses
+        losses = self.loss_q_network(observation_tensor, cross_obs_tensor, actions_tensor, target_values)
+        losses = tf.reduce_mean(losses, axis=-1).numpy().tolist()
+        # print('Average TD Error:', np.mean(losses))
+        # print(losses)
+
+        # 4. Assign priorities
+        alpha = 0.6
+        epsilon = 0.01
+        priorities = [(loss + epsilon)**alpha for loss in losses]
+        for idx, design in enumerate(self.replay_buffer):
+            design['priority'] = priorities[idx]
+        # print(priorities)
+
+        # 5. Calculate probabilities
+        total_priority = sum(priorities)
+        probabilities = [p / total_priority for p in priorities]
+        # print(probabilities)
+
+        # 6. Calculate importance sampling weights
+        beta = 0.4
+        weights = (1 / (len(self.replay_buffer) * np.array(probabilities))) ** beta
+        max_weight = np.max(weights)
+        normalized_weights = weights / max_weight
+        for idx, nw in enumerate(normalized_weights):
+            self.replay_buffer[idx]['importance_weight'] = nw
+
+        # 6. Finally get update batch
+        update_batch_size = min(update_batch_size_max, len(self.replay_buffer))
+        update_batch = np.random.choice(self.replay_buffer, size=update_batch_size, p=probabilities)
+        return update_batch
+
+    @tf.function(input_signature=[
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.int32),
+        tf.TensorSpec(shape=(None, None), dtype=tf.float32),
+        # tf.TensorSpec(shape=(None, ), dtype=tf.float32),
+    ])
+    def train_q_network(self, observation, cross_obs_tensor, actions, target_values):
+
+        with tf.GradientTape() as tape:
+            pred_q_values = self.value_network([observation, cross_obs_tensor])
+            q_values = tf.reduce_sum(
+                tf.one_hot(actions, self.num_actions) * pred_q_values, axis=-1
+            )
+            # loss = tf.reduce_mean(tf.square(target_values - q_values), axis=-1)
+            # loss = tf.reduce_mean(loss * importance_weights)
+            loss = tf.reduce_mean(tf.square(target_values - q_values))
+
+        gradients = tape.gradient(loss, self.value_network.trainable_variables)
+        self.value_optimizer.apply_gradients(zip(gradients, self.value_network.trainable_variables))
+        return loss
+
     @tf.function(input_signature=[
         tf.TensorSpec(shape=(None, None), dtype=tf.float32),
         tf.TensorSpec(shape=(None, None), dtype=tf.float32),
         tf.TensorSpec(shape=(None, None), dtype=tf.int32),
         tf.TensorSpec(shape=(None, None), dtype=tf.float32),
     ])
-    def train_q_network(self, observation, cross_obs_tensor, actions, target_values):
-        with tf.GradientTape() as tape:
-            pred_q_values = self.value_network([observation, cross_obs_tensor])
-            q_values = tf.reduce_sum(
-                tf.one_hot(actions, self.num_actions) * pred_q_values, axis=-1
-            )
-            loss = tf.reduce_mean(tf.square(target_values - q_values))
-
-        gradients = tape.gradient(loss, self.value_network.trainable_variables)
-        self.value_optimizer.apply_gradients(zip(gradients, self.value_network.trainable_variables))
-        return loss
+    def loss_q_network(self, observation, cross_obs_tensor, actions, target_values):
+        pred_q_values = self.value_network([observation, cross_obs_tensor])
+        q_values = tf.reduce_sum(
+            tf.one_hot(actions, self.num_actions) * pred_q_values, axis=-1
+        )
+        losses = tf.abs(target_values - q_values)
+        return losses
 
     @tf.function(input_signature=[
         tf.TensorSpec(shape=(None, None), dtype=tf.float32),
@@ -689,13 +782,15 @@ class QLearning:
         design.set_objectives(obj_value * -1.0, obj_weight)
         design.evaluate_constraints(constraint)
         design.evaluated = True
+        new_design = False
         if bitstr not in self.unique_designs:
+            new_design = True
             self.unique_designs.add(bitstr)
             self.unique_designs_vals.append([obj_value * -1.0, obj_weight])
             self.unique_designs_feasible.append(design.is_feasible)
             self.unique_designs_epoch.append(self.curr_epoch)
             self.nfe += 1
-        return reward, design, her_rewards, her_weights, constraint
+        return reward, design, her_rewards, her_weights, constraint, new_design
 
     def calc_her_reward(self, obj_value, obj_weight, weight):
         w1 = weight
@@ -822,11 +917,6 @@ class QLearning:
         plt.xlabel('Value')
         plt.ylabel('Weight')
         plt.title('GA Designs')
-
-
-
-
-
 
         plt.tight_layout()
         save_path = os.path.join(self.run_dir, 'plots_' + str(self.val_itr) + '.png')
